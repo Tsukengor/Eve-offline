@@ -1,0 +1,240 @@
+extends Node2D
+
+const Voyage = preload("res://flight/voyage_state.gd")
+const Model = preload("res://flight/ship_model.gd")
+const Physics = preload("res://flight/ship_physics.gd")
+const SHIP := preload("res://assets/flight/rescue_ship.png")
+const STATION := preload("res://assets/flight/station.png")
+const DISTRESS_STATION := preload("res://assets/flight/station_distress.png")
+const EXHAUST := preload("res://assets/flight/thruster.png")
+const MANEUVER_EXHAUST := preload("res://assets/flight/maneuver_thruster.png")
+const MUZZLE_FLASH := preload("res://assets/flight/muzzle_flash.png")
+const REACTOR := preload("res://assets/deck/reactor.png")
+const ROOM_DAMAGE := preload("res://assets/deck/room_damage.png")
+const STARFIELD := preload("res://assets/flight/starfield.png")
+
+const SCAN_FLOORS := {
+	"B": Color("#36526b"), "E": Color("#3c4a5d"), "S": Color("#365450"),
+	"C": Color("#243447"), "W": Color("#583c51"), "L": Color("#34566a"), "R": Color("#554b3c"),
+}
+
+const GRID_PITCH := 84.0
+const GRID := Color(0.47, 0.62, 0.78, 0.14)
+const VELOCITY_COLOR := Color("#78ead0")
+const ACCELERATION_COLOR := Color("#f7bf79")
+
+@onready var frame: Control = get_parent()
+var voyage: Voyage
+var _font := ThemeDB.fallback_font
+
+
+func world_to_screen(point: Vector2) -> Vector2:
+	return frame.size * 0.5 + (point - voyage.ship_position)
+
+
+func _draw() -> void:
+	if voyage == null:
+		return
+	var size := frame.size
+	var center := size * 0.5
+	draw_texture_rect(STARFIELD, Rect2(Vector2.ZERO, size), false)
+	_draw_grid(size)
+	if not voyage.in_arena:
+		_draw_station(size)
+	for hostile in voyage.enemies:
+		_draw_enemy(hostile, size)
+	_draw_projectiles(size)
+	_draw_ship()
+	_draw_vector(center, voyage.velocity * 0.48, VELOCITY_COLOR, "v", false)
+	_draw_vector(center, voyage.acceleration * 0.35, ACCELERATION_COLOR, "a", true)
+	if voyage.scan_enemy and is_instance_valid(voyage.enemy):
+		_draw_scan(size)
+	_text("v  Скорость", Vector2(18, size.y - 18), 13, VELOCITY_COLOR)
+	_text("a  Ускорение", Vector2(122, size.y - 18), 13, ACCELERATION_COLOR)
+	if get_tree().paused:
+		_text("На паузе", Vector2(18, 28), 15, ACCELERATION_COLOR)
+	elif voyage.simulation_speed < 1.0:
+		_text("Время 0,25×", Vector2(18, 28), 15, ACCELERATION_COLOR)
+
+
+func _draw_grid(size: Vector2) -> void:
+	var origin := voyage.ship_position - size * 0.5
+	var start := Vector2(fposmod(-origin.x, GRID_PITCH), fposmod(-origin.y, GRID_PITCH))
+	var x := start.x
+	while x < size.x:
+		draw_line(Vector2(x, 0), Vector2(x, size.y), GRID)
+		x += GRID_PITCH
+	var y := start.y
+	while y < size.y:
+		draw_line(Vector2(0, y), Vector2(size.x, y), GRID)
+		y += GRID_PITCH
+
+
+func _draw_station(size: Vector2) -> void:
+	var station := world_to_screen(voyage.station_position())
+	var label: String = "«%s»" % Voyage.SYSTEMS[voyage.current_system].station
+	var distress := voyage.current_system == Voyage.DISTRESS
+	var active_distress := distress and voyage.stage == Voyage.Stage.ANSWER_DISTRESS
+	var color := ACCELERATION_COLOR if active_distress else VELOCITY_COLOR
+	var visible_area := Rect2(Vector2.ZERO, size)
+	if visible_area.grow(Voyage.DOCK_RANGE).has_point(station):
+		var ring := Color(color, 0.56 if voyage.distance_to_station() < 220.0 else 0.24)
+		for segment in range(16):
+			var start := TAU * segment / 16.0
+			draw_arc(station, Voyage.DOCK_RANGE, start, start + TAU * 0.57 / 16.0, 6, ring, 1.0, true)
+		_sprite(DISTRESS_STATION if distress else STATION, station, 112)
+		var label_position := station + Vector2(0, 76)
+		if visible_area.has_point(station) and visible_area.grow(-34.0).has_point(label_position):
+			_centered(label, label_position, color)
+	if not visible_area.has_point(station):
+		_draw_station_bearing(size, station, label, color)
+
+
+func _draw_enemy(enemy: Voyage.EnemyShip, size: Vector2) -> void:
+	if not is_instance_valid(enemy) or enemy.disabled():
+		return
+	var point := world_to_screen(enemy.position)
+	var danger := Color("#ff8c85")
+	if Rect2(Vector2.ZERO, size).grow(40.0).has_point(point):
+		_draw_thrusters(enemy.body)
+		draw_set_transform(world_to_screen(enemy.model.world_point(Vector2.ZERO, enemy.position, enemy.heading)), enemy.heading + PI * 0.5)
+		var condition := enemy.deck.hull.integrity / Voyage.DeckSimulation.Hull.HULL_MAX
+		_sprite(enemy.sprite, Vector2.ZERO, enemy.sprite_size, Color.WHITE.lerp(danger, (1.0 - condition) * 0.55))
+		if enemy.flash_remaining > 0.0 and enemy.weapon != null:
+			for mount in enemy.weapon.mounts:
+				_sprite(MUZZLE_FLASH, mount, 19.0, Color(1, 0.7, 0.5, enemy.flash_remaining / Voyage.FLASH_SECONDS))
+		draw_set_transform(Vector2.ZERO)
+		draw_rect(Rect2(point + Vector2(-24, 43), Vector2(48, 3)), Color("#30465c"))
+		draw_rect(Rect2(point + Vector2(-24, 43), Vector2(48 * condition, 3)), danger)
+		_centered(enemy.call_sign, point + Vector2(0, 64), danger)
+	if not Rect2(Vector2.ZERO, size).has_point(point):
+		_draw_station_bearing(size, point, enemy.call_sign, danger)
+
+
+func _draw_station_bearing(size: Vector2, station: Vector2, label: String, color: Color) -> void:
+	var center := size * 0.5
+	var direction := center.direction_to(station)
+	var inset := center - Vector2(83, 48)
+	var scale := minf(inset.x / maxf(absf(direction.x), 0.0001), inset.y / maxf(absf(direction.y), 0.0001))
+	var tip := center + direction * scale
+	_arrow_tip(tip, direction, color, 10.0)
+	_centered(label, tip - direction * 34.0 + Vector2(0, -10), color)
+
+
+func _draw_projectiles(size: Vector2) -> void:
+	var visible_area := Rect2(Vector2.ZERO, size).grow(24)
+	for projectile in voyage.projectiles:
+		var point := world_to_screen(projectile.position)
+		if visible_area.has_point(point):
+			draw_set_transform(point, projectile.velocity.angle() + PI * 0.5)
+			_sprite(projectile.sprite, Vector2.ZERO, projectile.sprite_size, Color("#ff995e") if projectile.hostile else Color.WHITE)
+	if voyage.flash_remaining > 0.0:
+		var flash_position := world_to_screen(voyage.muzzle_position())
+		draw_set_transform(flash_position, voyage.flash_direction.angle() + PI * 0.5)
+		_sprite(MUZZLE_FLASH, Vector2.ZERO, 29.0, Color(1, 1, 1, voyage.flash_remaining / Voyage.FLASH_SECONDS))
+	draw_set_transform(Vector2.ZERO)
+
+
+func _draw_ship() -> void:
+	var body := voyage.body
+	_draw_thrusters(body)
+	var healthy := voyage.deck.engine_health >= 1.0 and voyage.deck.hull.condition(voyage.deck.engine_tile) >= 1.0
+	var hull_center := world_to_screen(body.model.world_point(Vector2.ZERO, body.position, body.heading))
+	draw_set_transform(hull_center, body.heading + PI * 0.5)
+	_sprite(SHIP, Vector2.ZERO, 60, Color.WHITE if healthy else Color("#f8c599"))
+	draw_set_transform(Vector2.ZERO)
+
+
+func _draw_thrusters(body: Physics.Body) -> void:
+	var model := body.model
+	for index in body.active:
+		var exhaust := -model.nozzle_forces[index].normalized().rotated(body.heading + PI * 0.5)
+		var at := world_to_screen(model.world_point(model.nozzle_points[index], body.position, body.heading))
+		var level := body.active[index]
+		var main := model.nozzle_groups[index] == Model.Group.MAIN
+		var length := lerpf(3.0, 23.0 if main else 13.0, level)
+		draw_set_transform(at + exhaust * length * 0.38, exhaust.angle() - (PI * 0.5 if main else 0.0))
+		_sprite(EXHAUST if main else MANEUVER_EXHAUST, Vector2.ZERO, length, Color(1, 1, 1, 0.85 * sqrt(level)))
+	draw_set_transform(Vector2.ZERO)
+
+
+func _draw_scan(size: Vector2) -> void:
+	var deck := voyage.enemy.deck
+	var panel := Rect2(15.0, size.y - 183.0, 204.0, 145.0)
+	var cell_size := minf(10.0, (panel.size.y - 30.0) / deck.plan.size())
+	var origin := panel.position + Vector2((panel.size.x - deck.plan[0].length() * cell_size) * 0.5, 25)
+	draw_rect(panel, Color("#101e2e"))
+	draw_rect(panel, Color("#30465c"), false)
+	_text("%s  ·  %d/%d" % [voyage.enemy.call_sign.to_upper(), voyage.scan_index % voyage.enemies.size() + 1, voyage.enemies.size()], panel.position + Vector2(12, 18), 12, Color("#bfd1e4"))
+	_text("%d%%" % floori(deck.power.energy), panel.position + Vector2(161, 18), 12, ACCELERATION_COLOR)
+	for y in range(deck.plan.size()):
+		for x in range(deck.plan[y].length()):
+			var tile := Vector2i(x, y)
+			var kind := deck.tile_kind(tile)
+			if kind == ".":
+				continue
+			var at := origin + Vector2(tile) * cell_size
+			var air := deck.hull.oxygen_at(tile)
+			var fill: Color = SCAN_FLOORS[kind].lerp(Color("#307da2"), 1.0 - air)
+			var damage := 1.0 - deck.hull.condition(tile)
+			fill = fill.lerp(Color("#a25956"), damage * 0.72)
+			draw_rect(Rect2(at, Vector2.ONE * (cell_size - 1.0)), fill)
+			if deck.hull.breaches.has(tile):
+				draw_circle(at + Vector2.ONE * 4.5, 2.4, Color("#ffb297"))
+	for edge: Vector4i in deck.doors:
+		var a := Vector2(edge.x, edge.y)
+		var b := Vector2(edge.z, edge.w)
+		var center := origin + ((a + b) * 0.5 + Vector2.ONE * 0.45) * cell_size
+		var tangent := (b - a).orthogonal() * 3.5
+		var door: Voyage.DeckSimulation.Door = deck.doors[edge]
+		draw_line(center - tangent, center + tangent, Color("#547883") if door.openness > 0.95 else Color("#cd9c6b"), 2.0)
+	for tile: Vector2i in deck.module_cells:
+		var at := origin + (Vector2(tile) + Vector2.ONE * 0.45) * cell_size
+		if deck.hull.condition(tile) < 1.0:
+			_sprite(ROOM_DAMAGE, at, 9.0)
+		elif tile == deck.reactor_tile:
+			_sprite(REACTOR, at, 7.0)
+		else:
+			draw_rect(Rect2(at - Vector2.ONE * 2.5, Vector2.ONE * 5.0), Color("#7291a6"), false)
+	for member in deck.crew:
+		if member.health <= 0.0:
+			continue
+		var color := member.color.lerp(Color("#ff766f"), 1.0 - member.health / 100.0)
+		draw_circle(origin + (member.position + Vector2.ONE * 0.45) * cell_size, 2.8, color)
+
+
+func _draw_vector(center: Vector2, vector: Vector2, color: Color, label: String, dashed: bool) -> void:
+	if vector.length_squared() < 1.0:
+		return
+	var direction := vector.normalized()
+	var normal := direction.orthogonal()
+	var tip := center + vector.limit_length(131.0)
+	if dashed:
+		draw_dashed_line(center, tip, color, 2.0, 6.0)
+	else:
+		draw_line(center, tip, color, 2.0, true)
+	_arrow_tip(tip, direction, color, 8.0)
+	_text(label, tip + normal * (10.0 if dashed else -10.0) + Vector2(-3, 4), 13, color)
+
+
+func _arrow_tip(tip: Vector2, direction: Vector2, color: Color, length: float) -> void:
+	var base := tip - direction * length
+	var edge := direction.orthogonal() * length * 0.45
+	draw_colored_polygon(PackedVector2Array([tip, base + edge, base - edge]), color)
+
+
+func _sprite(texture: Texture2D, center: Vector2, longest: float, tint := Color.WHITE) -> void:
+	if texture == null:
+		return
+	var size := texture.get_size()
+	var extent := size * (longest / maxf(size.x, size.y))
+	draw_texture_rect(texture, Rect2(center - extent * 0.5, extent), false, tint)
+
+
+func _centered(value: String, at: Vector2, tint: Color) -> void:
+	var width := _font.get_string_size(value, HORIZONTAL_ALIGNMENT_LEFT, -1, 15).x
+	_text(value, at - Vector2(width * 0.5, 0), 15, tint)
+
+
+func _text(value: String, at: Vector2, size: int, tint: Color) -> void:
+	draw_string(_font, at, value, HORIZONTAL_ALIGNMENT_LEFT, -1, size, tint)

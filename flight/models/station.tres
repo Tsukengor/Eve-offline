@@ -1,0 +1,7 @@
+[gd_resource type="Resource" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://flight/ship_model.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+hull = PackedVector2Array(0, -53, 44, -30, 50, 0, 44, 30, 0, 53, -44, 30, -50, 0, -44, -30)

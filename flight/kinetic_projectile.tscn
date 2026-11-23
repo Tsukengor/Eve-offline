@@ -1,0 +1,8 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://flight/projectile.gd" id="1"]
+[ext_resource type="Texture2D" path="res://assets/flight/kinetic_bolt.png" id="2"]
+
+[node name="KineticProjectile" type="Node"]
+script = ExtResource("1")
+sprite = ExtResource("2")

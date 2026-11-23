@@ -1,0 +1,36 @@
+[gd_scene load_steps=7 format=3]
+
+[ext_resource type="Script" path="res://flight/run.gd" id="1"]
+[ext_resource type="Script" path="res://flight/voyage_state.gd" id="2"]
+[ext_resource type="Script" path="res://flight/space_display.gd" id="3"]
+[ext_resource type="PackedScene" path="res://deck/deck.tscn" id="4"]
+[ext_resource type="Resource" path="res://flight/kinetic_weapon.tres" id="5"]
+
+[ext_resource type="Script" path="res://flight/flight_field.gd" id="6"]
+
+[node name="VoyageRun" type="Node2D"]
+process_mode = 3
+script = ExtResource("1")
+
+[node name="Voyage" type="Node" parent="."]
+process_mode = 1
+script = ExtResource("2")
+weapon = ExtResource("5")
+
+[node name="Space" type="Node2D" parent="."]
+script = ExtResource("3")
+
+[node name="FlightViewport" type="Control" parent="Space"]
+clip_contents = true
+offset_left = 33.0
+offset_top = 125.0
+offset_right = 769.0
+offset_bottom = 595.0
+mouse_filter = 2
+
+[node name="FlightField" type="Node2D" parent="Space/FlightViewport"]
+script = ExtResource("6")
+
+[node name="Deck" parent="." instance=ExtResource("4")]
+visible = false
+standalone = false

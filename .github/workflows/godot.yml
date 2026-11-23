@@ -1,0 +1,39 @@
+name: Godot
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    if: github.ref_type != 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Run regression tests
+        run: python3 -u scripts/godot_release.py --cache "$RUNNER_TEMP/eve-godot"
+
+  release:
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check and export Linux and Windows
+        run: python3 -u scripts/godot_release.py --cache "$RUNNER_TEMP/eve-godot" --build
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release create "$RELEASE_TAG" --verify-tag --title "Eve Offline $RELEASE_TAG" --generate-notes dist/*.zip dist/SHA256SUMS.txt

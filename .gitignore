@@ -1,0 +1,8 @@
+/.godot/
+/.agents/
+/.aws/
+/.codex/
+/dist/
+/export_credentials.cfg
+/.env
+/.env.*

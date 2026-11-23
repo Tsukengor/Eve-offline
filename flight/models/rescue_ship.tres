@@ -1,0 +1,13 @@
+[gd_resource type="Resource" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://flight/ship_model.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+mass = 21.0
+moment = 6300.0
+center_of_mass = Vector2(0, 3)
+hull = PackedVector2Array(0, -30, 9, -18, 20, 5, 19, 21, 10, 29, -10, 29, -19, 21, -20, 5, -9, -18)
+nozzle_points = PackedVector2Array(-7, 27, 7, 27, 11, -18, -16, 24, -11, -18, 16, 24, 0, -27, 0, 27, -16, 3, 16, 3)
+nozzle_forces = PackedVector2Array(0, -900, 0, -900, -192.5, 0, 192.5, 0, 192.5, 0, -192.5, 0, 0, 2350, 0, -2350, 2350, 0, -2350, 0)
+nozzle_groups = PackedInt32Array(0, 0, 1, 1, 2, 2, 3, 3, 3, 3)
