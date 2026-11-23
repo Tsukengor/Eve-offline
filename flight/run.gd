@@ -19,6 +19,8 @@ var _space_reset: Button
 var _action: Button
 var _arena_button: Button
 var _computer_button: Button
+var _flak_button: Button
+var _spawn_missile_fighter: Button
 var _scan_button: Button
 var _scan_next: Button
 var _test_panel: Control
@@ -43,6 +45,7 @@ func _ready() -> void:
 	_action = _button("Стыковка", Vector2(816, 538), Vector2(252, 40), _interact)
 	_computer_button = _button("Борткомпьютер", Vector2(32, 651), Vector2(200, 34), _toggle_computer)
 	_scan_button = _button("Сканер", Vector2(244, 651), Vector2(165, 34), _toggle_scan)
+	_flak_button = _button("ПВО: выкл", Vector2(567, 651), Vector2(144, 34), _toggle_flak)
 	_scan_next = _button("Другая цель", Vector2(422, 651), Vector2(135, 34), _cycle_scan)
 	_weapon_select = OptionButton.new()
 	_weapon_select.position = Vector2(800, 651)
@@ -113,6 +116,10 @@ func _refresh() -> void:
 	space.refresh()
 	_computer_button.visible = mode == Mode.FLIGHT
 	_computer_button.text = "БК: включён" if voyage.flight_computer else "БК: выключен"
+	_flak_button.visible = mode == Mode.FLIGHT
+	_flak_button.text = "ПВО: авто" if voyage.flak_enabled else "ПВО: выкл"
+	if voyage.flak_enabled and not voyage.flight_computer:
+		_flak_button.text = "ПВО: ждёт БК"
 	_scan_button.visible = mode == Mode.FLIGHT and is_instance_valid(voyage.enemy)
 	_scan_button.text = "Скрыть сканер" if voyage.scan_enemy else "Сканер"
 	_scan_next.visible = _scan_button.visible and voyage.scan_enemy and voyage.enemies.size() > 1
@@ -121,6 +128,7 @@ func _refresh() -> void:
 	_weapon_select.select(voyage.test_weapon)
 	_spawn_drill.disabled = voyage.enemies.size() >= Voyage.MAX_TEST_ENEMIES
 	_spawn_fighter.disabled = _spawn_drill.disabled
+	_spawn_missile_fighter.disabled = _spawn_drill.disabled
 	_clear_targets.disabled = voyage.enemies.is_empty() and voyage.projectiles.is_empty()
 	_alert.visible = mode == Mode.FLIGHT and _alert_time > 0.0
 	if mode == Mode.DECK:
@@ -160,6 +168,11 @@ func _toggle_computer() -> void:
 	_refresh()
 
 
+func _toggle_flak() -> void:
+	voyage.flak_enabled = not voyage.flak_enabled
+	_refresh()
+
+
 func _toggle_scan() -> void:
 	voyage.scan_enemy = not voyage.scan_enemy
 	_refresh()
@@ -179,11 +192,13 @@ func _build_test_panel() -> void:
 		voyage.add_test_enemy.bind(Voyage.Opponent.DRILL))
 	_spawn_fighter = _test_button("+ Истребитель", Vector2(946, 177), Vector2(122, 33),
 		voyage.add_test_enemy.bind(Voyage.Opponent.FIGHTER))
-	_clear_targets = _test_button("Убрать противников", Vector2(816, 218), Vector2(252, 32), voyage.clear_test_enemies)
-	_damage_check("Урон игроку", 263, true)
-	_damage_check("Урон противникам", 295, false)
-	_test_mass_value = _label("", Vector2(816, 341), 15, _test_panel)
-	_test_slider(371, 0.5, 3.0, true)
+	_spawn_missile_fighter = _test_button("+ Ракетный истребитель", Vector2(816, 216), Vector2(252, 30),
+		voyage.add_test_enemy.bind(Voyage.Opponent.MISSILE_FIGHTER))
+	_clear_targets = _test_button("Убрать противников", Vector2(816, 251), Vector2(252, 30), voyage.clear_test_enemies)
+	_damage_check("Урон игроку", 282, true)
+	_damage_check("Урон противникам", 310, false)
+	_test_mass_value = _label("", Vector2(816, 348), 15, _test_panel)
+	_test_slider(373, 0.5, 3.0, true)
 	_test_thrust_value = _label("Тяга  1.00×", Vector2(816, 410), 15, _test_panel)
 	_test_slider(440, 0.25, 2.0, false)
 	_update_test_physics_labels()

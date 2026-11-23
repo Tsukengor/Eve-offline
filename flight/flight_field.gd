@@ -13,6 +13,9 @@ const LASER_BEAM := preload("res://assets/flight/laser_beam.png")
 const MISSILE := preload("res://assets/flight/guided_missile.png")
 const EXPLOSION := preload("res://assets/flight/missile_blast.png")
 const EMP_SPARK := preload("res://assets/flight/emp_spark.png")
+const RAIL_BOLT := preload("res://assets/flight/rail_bolt.png")
+const FLAK_BURST := preload("res://assets/flight/flak_burst.png")
+const IMPULSE_WAVE := preload("res://assets/flight/impulse_wave.png")
 const Profile = preload("res://flight/weapon_profile.gd")
 const REACTOR := preload("res://assets/deck/reactor.png")
 const ROOM_DAMAGE := preload("res://assets/deck/room_damage.png")
@@ -132,21 +135,32 @@ func _draw_projectiles(size: Vector2) -> void:
 		var point := world_to_screen(projectile.position)
 		match projectile.profile.kind:
 			Profile.Kind.LASER:
-				var finish := world_to_screen(projectile.end)
-				var length := point.distance_to(finish)
-				if length > 0.1:
-					draw_line(point, finish, Color(0.82, 0.54, 1.0, 0.68), 1.5, true)
-					draw_set_transform(point, projectile.angle + PI * 0.5)
-					draw_texture_rect(LASER_BEAM, Rect2(-6.0, -length, 12.0, length), false)
-					draw_set_transform(Vector2.ZERO)
-					if projectile.contact_body != null:
-						_sprite(LASER_BEAM, finish, 17.0, Color("#dfb6ff"))
+				var direction := Vector2.from_angle(projectile.angle)
+				var viewport_length := point.distance_to(size * 0.5) + size.length() * 0.5 + 8.0
+				var finish := point + direction * viewport_length
+				if projectile.beam_blocked:
+					var impact := world_to_screen(projectile.end)
+					if point.distance_to(impact) <= viewport_length:
+						finish = impact
+						_sprite(LASER_BEAM, impact, 8.0)
+				draw_line(point, finish, Color("#b266ed"), 3.0, true)
+				draw_line(point, finish, Color("#f8dfff"), 1.0, true)
 			Profile.Kind.EMP:
 				_draw_emp_wave(projectile, point)
+			Profile.Kind.FLAK:
+				var distance := projectile.reach
+				var center := point + Vector2.from_angle(projectile.angle) * distance * 0.65
+				_draw_shell(FLAK_BURST, center, projectile.angle, maxf(6.0, distance * 1.15), Color(1, 1, 1, 0.88))
+			Profile.Kind.RAIL:
+				if visible_area.has_point(point):
+					_draw_shell(RAIL_BOLT, point, projectile.angle, 35.0)
+			Profile.Kind.PUSH:
+				if visible_area.has_point(point):
+					_draw_shell(IMPULSE_WAVE, point, projectile.angle, 36.0)
 			Profile.Kind.MISSILE:
 				if projectile.blast_time > 0.0:
-					var fraction: float = projectile.blast_time / Voyage.Weapons.BLAST_SECONDS
-					var diameter := projectile.profile.missile_blast_radius * 2.0
+					var fraction: float = projectile.blast_time / (0.18 if projectile.intercepted else Voyage.Weapons.BLAST_SECONDS)
+					var diameter := 36.0 if projectile.intercepted else projectile.profile.missile_blast_radius * 2.0
 					_sprite(EXPLOSION, point, diameter * lerpf(0.25, 0.92, 1.0 - fraction), Color(1, 1, 1, sqrt(fraction)))
 					draw_arc(point, diameter * 0.5 * lerpf(0.35, 1.0, 1.0 - fraction), 0, TAU, 48, Color(1, 0.62, 0.30, fraction * 0.7), 2.0, true)
 				elif visible_area.has_point(point):
@@ -177,9 +191,7 @@ func _draw_emp_wave(projectile: Voyage.Projectile, point: Vector2) -> void:
 	var fade := 1.0 - 0.7 * projectile.reach / projectile.profile.emp_range
 	var outline := Color(0.42, 0.91, 1.0, fade)
 	draw_arc(point, projectile.reach, first, last, 32, outline, 3.0, true)
-	draw_arc(point, projectile.reach * 0.86, first, last, 26, Color(outline, fade * 0.38), 1.0, true)
-	draw_line(point, point + Vector2.from_angle(first) * projectile.reach, Color(outline, fade * 0.32), 1.0, true)
-	draw_line(point, point + Vector2.from_angle(last) * projectile.reach, Color(outline, fade * 0.32), 1.0, true)
+	draw_arc(point, maxf(0.0, projectile.reach - 6.0), first, last, 32, Color(outline, fade * 0.42), 1.0, true)
 	for factor in [-0.82, -0.41, 0.0, 0.41, 0.82]:
 		var spark := point + Vector2.from_angle(projectile.angle + half * factor) * projectile.reach
 		_sprite(EMP_SPARK, spark, 17.0, Color(1, 1, 1, fade))

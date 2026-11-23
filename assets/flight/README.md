@@ -31,3 +31,9 @@
 `laser_beam.png`, `guided_missile.png`, `missile_blast.png` и `emp_spark.png` вырезаны из одного атласа встроенного ImageGen. В полёте они показывают длину луча, ракету, взрыв и фронт ЭМИ. Искры отмечают отключённые системы на палубе и сканере.
 
 > One transparent horizontal 4-cell pixel-art sprite atlas for the fictional 2D Godot space game Eve Offline, strict overhead, crisp bold clusters. Four isolated game effects centered exactly in separate equal quarter-width columns with copious transparent gutters: first column a short violet-white laser streak pointing UP vertically with clean narrow core; second column a tiny dark orange homing missile pointing UP, with small amber exhaust; third column a circular copper-orange explosion sprite with bright center and uneven smoke fringe; fourth column a small icy-cyan electrical arc and spark cluster for an EMP. No lettering, lines between cells, backgrounds, spacecraft, or drop shadows. Genuine alpha transparency. Each sprite reads clearly at 16 to 48 pixels.
+
+## Рельсотрон, ПВО и толкатель
+
+`rail_bolt.png`, `flak_burst.png` и `impulse_wave.png` вырезаны из растрового атласа встроенного ImageGen.
+
+> Single three-column horizontal sprite atlas for a fictional top-down Godot pixel art game Eve Offline, transparent background. Three isolated effects centered in equal thirds with generous clear gutters. Left: tiny straight long silver teal rail projectile, needle shaped, pointed UP. Center: compact golden-orange short fan of separated flak sparks aimed UP, no ship. Right: compact green-cyan crescent impulse shockwave aimed UP, two bright pixel arcs. Crisp colorful pixel-art clusters, readable at 20–48 pixels, true alpha. No labels, no backdrop, no shadows, no other objects.

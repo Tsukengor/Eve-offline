@@ -15,10 +15,12 @@ const FIGHTER_SCENE := preload("res://flight/fighter_enemy.tscn")
 const TEST_WEAPONS := [
 	preload("res://flight/kinetic_weapon.tres"), preload("res://flight/laser_weapon.tres"),
 	preload("res://flight/missile_weapon.tres"), preload("res://flight/emp_weapon.tres"),
+	preload("res://flight/rail_weapon.tres"), preload("res://flight/push_weapon.tres"),
 ]
+const FLAK := preload("res://flight/flak_weapon.tres")
 const MAX_TEST_ENEMIES := 16
 
-enum Opponent { DRILL, FIGHTER }
+enum Opponent { DRILL, FIGHTER, MISSILE_FIGHTER }
 
 enum Stage { ANSWER_DISTRESS, DELIVER_SURVIVORS, COMPLETE }
 
@@ -79,6 +81,8 @@ var docked := false
 var manual_control := true
 var simulation_speed := 1.0
 var flight_computer := true
+var flak_enabled := false
+var flak_cooldown := 0.0
 var scan_enemy := false
 var incident_seen := false
 var notice := ""
@@ -179,8 +183,11 @@ func set_test_damage(player: bool, hostiles: bool) -> void:
 
 
 func _spawn_enemy(at: Vector2, kind: Opponent = Opponent.DRILL) -> EnemyShip:
-	var scene := FIGHTER_SCENE if kind == Opponent.FIGHTER else DRILL_SCENE
+	var scene := DRILL_SCENE if kind == Opponent.DRILL else FIGHTER_SCENE
 	var hostile := scene.instantiate() as EnemyShip
+	if kind == Opponent.MISSILE_FIGHTER:
+		hostile.weapon = TEST_WEAPONS[2]
+		hostile.call_sign = "Ракетчик"
 	hostile.position = at
 	hostile.heading = at.angle_to_point(ship_position)
 	add_child(hostile)
@@ -193,6 +200,7 @@ func _spawn_ship() -> void:
 		projectile.queue_free()
 	projectiles.clear()
 	weapon_cooldown = 0.0
+	flak_cooldown = 0.0
 	flash_remaining = 0.0
 	angular_velocity = 0.0
 	body.active.clear()
@@ -414,7 +422,7 @@ func fire() -> bool:
 		return false
 	deck.power.spend(weapon.energy_cost)
 	flash_direction = Vector2.from_angle(angle)
-	flash_remaining = FLASH_SECONDS if weapon.kind in [WeaponProfile.Kind.KINETIC, WeaponProfile.Kind.MISSILE] else 0.0
+	flash_remaining = FLASH_SECONDS if weapon.kind in [WeaponProfile.Kind.KINETIC, WeaponProfile.Kind.MISSILE, WeaponProfile.Kind.RAIL] else 0.0
 	weapon_cooldown = weapon.cooldown
 	changed.emit()
 	return true
@@ -430,15 +438,39 @@ func _advance_weapons(delta: float) -> bool:
 	var updated := not projectiles.is_empty() or weapon_cooldown > 0.0 or flash_remaining > 0.0
 	weapon_cooldown = move_toward(weapon_cooldown, 0.0, delta)
 	flash_remaining = move_toward(flash_remaining, 0.0, delta)
+	flak_cooldown = move_toward(flak_cooldown, 0.0, delta)
 	if not projectiles.is_empty():
+		_try_flak()
 		var targets := _weapon_targets()
 		var station := null if in_arena else station_body
 		for index in range(projectiles.size() - 1, -1, -1):
 			var projectile := projectiles[index]
-			if not Weapons.tick(projectile, delta, targets, station):
+			if not Weapons.tick(projectile, delta, targets, station, projectiles):
 				projectiles.remove_at(index)
 				projectile.queue_free()
 	return updated
+
+
+func _try_flak() -> void:
+	if not flight_computer or not flak_enabled or flak_cooldown > 0.0 or docked:
+		return
+	if deck.disabled() or not deck.module_online(deck.weapons_tile) or not deck.power.can_spend(FLAK.energy_cost):
+		return
+	var mount := body.model.muzzle
+	mount.y = -FLAK.muzzle_offset
+	var origin := body.model.world_point(mount, ship_position, heading)
+	for missile in projectiles:
+		if not missile.hostile or missile.profile.kind != WeaponProfile.Kind.MISSILE or missile.blast_time > 0.0:
+			continue
+		var offset := missile.position - origin
+		if offset.length_squared() > FLAK.flak_range * FLAK.flak_range:
+			continue
+		if absf(angle_difference(heading, offset.angle())) > deg_to_rad(FLAK.flak_angle * 0.5):
+			continue
+		if _launch_shot(FLAK, body, mount, heading, false):
+			deck.power.spend(FLAK.energy_cost)
+			flak_cooldown = FLAK.cooldown
+		return
 
 
 func _weapon_targets() -> Array[Weapons.Target]:
@@ -501,12 +533,17 @@ func _advance_battle(delta: float) -> bool:
 
 func _fire_hostile(hostile: EnemyShip) -> void:
 	var profile := hostile.weapon
-	if profile == null or profile.projectile == null or profile.mounts.is_empty():
+	if profile == null or profile.projectile == null:
 		return
 	if not hostile.deck.power.can_spend(profile.energy_cost):
 		return
 	var spread := (1.0 - hostile.deck.hull.condition(hostile.deck.weapons_tile)) * profile.damaged_spread_degrees
-	for mount in profile.mounts:
+	var mounts := profile.mounts
+	if mounts.is_empty():
+		var nose := hostile.body.model.muzzle
+		nose.y = -profile.muzzle_offset
+		mounts = PackedVector2Array([nose])
+	for mount in mounts:
 		var angle := hostile.heading + deg_to_rad(randf_range(-spread, spread))
 		if not _launch_shot(profile, hostile.body, mount, angle, true):
 			return

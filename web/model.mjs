@@ -22,13 +22,15 @@ export const WEAPON_TYPES = {
   laser: 'Лазер',
   missile: 'Самонаводящаяся ракета',
   emp: 'Излучатель ЭМИ',
+  rail: 'Рельсотрон',
+  flak: 'Осколочная ПВО',
+  push: 'Импульсный толкатель',
 };
 const SPECIAL_FIELDS = {
   kinetic: {},
   laser: {
-    laser_speed: ['Скорость развёртывания', 1, 20000, 1, 2800],
     laser_duration: ['Длительность луча, с', 0.05, 20, 0.05, 1.4],
-    laser_range: ['Дальность луча', 1, 2000, 1, 460],
+    laser_ticks_per_second: ['Тиков урона в секунду', 10, 15, 1, 12],
   },
   missile: {
     missile_speed: ['Скорость ракеты', 1, 2500, 1, 145],
@@ -46,11 +48,29 @@ const SPECIAL_FIELDS = {
     emp_systems: ['Максимум отключённых систем', 0, 6, 1, 3],
     emp_edge_strength: ['Доля эффекта на краю дальности', 0, 1, 0.01, 0.35],
   },
+  rail: {
+    rail_speed: ['Скорость снаряда', 1, 6000, 1, 1550],
+    rail_penetration: ['Максимум пробиваемых отсеков', 1, 16, 1, 5],
+    rail_retention: ['Доля урона после пробития отсека', 0, 1, 0.01, 0.74],
+  },
+  flak: {
+    flak_speed: ['Скорость осколочного фронта', 1, 6000, 1, 1000],
+    flak_angle: ['Полный угол веера, °', 1, 175, 1, 80],
+    flak_range: ['Дальность перехвата', 1, 600, 1, 150],
+  },
+  push: {
+    push_speed: ['Скорость волны', 1, 3000, 1, 475],
+    push_range: ['Дальность волны', 1, 1500, 1, 250],
+    push_impulse: ['Сила импульса', 0, 12000, 1, 1580],
+  },
 };
 const PRESET = {
   laser: {damage:36,crew_damage:5,breach_chance:0.03,energy_cost:42,cooldown:2.2},
   missile: {damage:59,crew_damage:16,breach_chance:0.4,energy_cost:26,cooldown:2},
   emp: {damage:0,crew_damage:0,breach_chance:0,energy_cost:30,cooldown:2.6},
+  rail: {damage:38,crew_damage:7,breach_chance:0.3,energy_cost:46,cooldown:3.1},
+  flak: {damage:0,crew_damage:0,breach_chance:0,energy_cost:9,cooldown:0.8},
+  push: {damage:7,crew_damage:0,breach_chance:0,energy_cost:21,cooldown:1.7},
 };
 export function weaponFields(type) {
   const fields = {...WEAPON_FIELDS,...SPECIAL_FIELDS[type]};
@@ -58,7 +78,7 @@ export function weaponFields(type) {
     for(const [key,label] of Object.entries({damage:'Урон отсеку в секунду',crew_damage:'Урон экипажу в секунду',breach_chance:'Шанс пробоины за секунду'}))
       fields[key] = [label,...fields[key].slice(1)];
   }
-  if (type === 'emp') for(const key of ['damage','crew_damage','breach_chance']) delete fields[key];
+  if (['emp','flak'].includes(type)) for(const key of ['damage','crew_damage','breach_chance']) delete fields[key];
   return fields;
 }
 const coords = (p) => Array.isArray(p) && p.length === 2 && p.every(n => Number.isInteger(n) && n >= -1 && n <= LIMITS.width);
@@ -153,11 +173,19 @@ export function weaponDefault(type='kinetic') {
     ...Object.fromEntries(Object.entries(weaponFields(type)).map(([k,v])=>[k,v[4]])),...PRESET[type],mounts:[]};
 }
 
+export function upgradeWeapon(data) {
+  if (!tagged(data,'eve.weapon') || data.projectile !== 'laser') return data;
+  const {laser_range,laser_speed,...profile} = data;
+  if (!Object.hasOwn(profile,'laser_ticks_per_second')) profile.laser_ticks_per_second = 12;
+  return profile;
+}
+
 export function validWeapon(data) {
+  data=upgradeWeapon(data);
   return tagged(data,'eve.weapon') && typeof data.name === 'string' && data.name.trim().length > 0 && data.name.length <= 40 &&
     Object.hasOwn(WEAPON_TYPES,data.projectile) && Object.entries(weaponFields(data.projectile)).every(([key,[,min,max]]) =>
       Number.isFinite(data[key]) && data[key] >= min && data[key] <= max &&
-      (key !== 'emp_systems' || Number.isInteger(data[key]))) &&
+      (!['emp_systems','laser_ticks_per_second','rail_penetration'].includes(key) || Number.isInteger(data[key]))) &&
     Array.isArray(data.mounts) && data.mounts.length <= 12 && data.mounts.every(p =>
       Array.isArray(p) && p.length === 2 && p.every(v=>Number.isFinite(v)&&Math.abs(v)<=256));
 }

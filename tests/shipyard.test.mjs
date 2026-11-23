@@ -1,7 +1,7 @@
 import {readFileSync} from 'node:fs';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {edgeKey,fresh,inspectLayout,prune,validWeapon,weaponDefault} from '../web/model.mjs';
+import {edgeKey,fresh,inspectLayout,prune,validWeapon,weaponDefault,upgradeWeapon} from '../web/model.mjs';
 
 const layout = (name) => JSON.parse(readFileSync(new URL('../deck/layouts/'+name+'.json',import.meta.url),'utf8'));
 
@@ -42,4 +42,18 @@ test('the shipyard exports laser, missile and EMP parameters with the correct ki
   assert.ok(!validWeapon({...weaponDefault('missile'),missile_blast_radius:-1}));
   assert.ok(!validWeapon({...weaponDefault('emp'),emp_systems:1.5}));
   assert.ok(!validWeapon({...weaponDefault('emp'),emp_edge_strength:1.5}));
+});
+
+test('the shipyard exports railgun, flak and impulse profiles and sets a laser tick rate',()=>{
+  for (const type of ['rail','flak','push']) assert.ok(validWeapon(weaponDefault(type)));
+  assert.ok(!Object.hasOwn(weaponDefault('laser'),'laser_range'));
+  assert.equal(weaponDefault('laser').laser_ticks_per_second,12);
+  const legacy={...weaponDefault('laser'),laser_range:460,laser_speed:2800};
+  delete legacy.laser_ticks_per_second;
+  assert.ok(validWeapon(legacy));
+  assert.deepEqual(upgradeWeapon(legacy),weaponDefault('laser'));
+  assert.ok(!validWeapon({...weaponDefault('laser'),laser_ticks_per_second:16}));
+  assert.ok(!validWeapon({...weaponDefault('rail'),rail_penetration:1.5}));
+  assert.ok(!validWeapon({...weaponDefault('flak'),flak_angle:200}));
+  assert.ok(!validWeapon({...weaponDefault('push'),push_impulse:-1}));
 });

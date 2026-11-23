@@ -29,6 +29,11 @@ func _test() -> void:
 	_check_laser()
 	_check_missile()
 	_check_emp()
+	_check_railgun()
+	_check_flak()
+	_check_pusher()
+	_game._toggle_arena()
+	_check(_game.voyage.weapon.kind == 0, "The rescue scenario retains its kinetic weapon")
 	if _failures == 0:
 		print("Combat regression checks passed.")
 	quit(_failures)
@@ -332,21 +337,23 @@ func _weapon_fixture(kind: int) -> Voyage:
 func _check_laser() -> void:
 	var voyage := _weapon_fixture(1)
 	var target := voyage.add_test_enemy(Voyage.Opponent.DRILL)
-	target.position = voyage.ship_position + Vector2(210, 0)
+	target.position = voyage.ship_position + Vector2(1700, 0)
 	target.heading = PI
 	var initial := target.deck.hull.integrity
 	_check(voyage.fire() and voyage.deck.power.energy == 58.0, "The laser consumes its high energy cost")
 	var beam := voyage.projectiles[0]
-	voyage._advance_weapons(TICK)
-	_check(beam.reach < 60.0 and target.deck.hull.integrity == initial, "The beam grows at its travel speed")
-	for frame in range(32):
+	for frame in range(4):
 		voyage._advance_weapons(TICK)
-	_check(initial - target.deck.hull.integrity > 12.0 and initial - target.deck.hull.integrity < 22.0,
-		"A target in contact receives progressive laser damage")
+	_check(beam.beam_blocked and target.deck.hull.integrity == initial, "The unbounded beam reaches a distant hull before its first damage tick")
+	voyage._advance_weapons(TICK)
+	_check(is_equal_approx(initial - target.deck.hull.integrity, 3.0), "The laser applies one twelfth of its DPS after five 60 Hz frames")
+	for frame in range(25):
+		voyage._advance_weapons(TICK)
+	_check(is_equal_approx(initial - target.deck.hull.integrity, 18.0), "Uninterrupted contact deals six discrete ticks in half a second")
 	initial = target.deck.hull.integrity
 	voyage.heading = PI * 0.5
 	voyage._advance_weapons(TICK)
-	_check(beam.position.is_equal_approx(voyage.muzzle_position()) and beam.end.y > beam.position.y
+	_check(beam.position.is_equal_approx(voyage.muzzle_position()) and not beam.beam_blocked
 		and target.deck.hull.integrity == initial, "The beam turns with its ship and damage stops when contact breaks")
 	for frame in range(90):
 		voyage._advance_weapons(TICK)
@@ -393,6 +400,12 @@ func _check_emp() -> void:
 	near_ship.heading = PI
 	far_ship.heading = PI
 	_check(voyage.fire(), "The EMP emits a traveling cone")
+	voyage._advance_weapons(TICK)
+	_check(near_ship.deck.power.energy == 100.0 and far_ship.deck.power.energy == 100.0,
+		"Ships beyond the wave front are unaffected")
+	var rim := PackedVector2Array([Vector2(100, 35), Vector2(122, 35), Vector2(122, 64), Vector2(100, 64)])
+	_check(Voyage.Weapons._sector_front(Vector2.ZERO, 0.0, deg_to_rad(20.0), rim, 100.0, 115.0) != null,
+		"An EMP hits the hull where it intersects the cone even if its center is outside")
 	for frame in range(35):
 		voyage._advance_weapons(TICK)
 	_check(near_ship.deck.power.energy < far_ship.deck.power.energy and far_ship.deck.power.energy < 100.0
@@ -404,8 +417,60 @@ func _check_emp() -> void:
 		near_ship.deck._physics_process(TICK)
 	_check(near_ship.deck.emp_timers.is_empty() and near_ship.deck.module_online(near_ship.deck.weapons_tile),
 		"Disabled systems automatically return when the EMP timer ends")
-	_game._toggle_arena()
-	_check(voyage.weapon.kind == 0, "The rescue scenario retains its kinetic weapon")
+
+
+func _check_railgun() -> void:
+	var voyage := _weapon_fixture(4)
+	var first := voyage.add_test_enemy(Voyage.Opponent.DRILL)
+	var second := voyage.add_test_enemy(Voyage.Opponent.DRILL)
+	first.position = voyage.ship_position + Vector2(145, 0)
+	second.position = voyage.ship_position + Vector2(285, 0)
+	first.heading = PI
+	second.heading = PI
+	_check(voyage.fire(), "Railgun launches")
+	for frame in range(20):
+		voyage._advance_weapons(TICK)
+	var damaged_rooms := 0
+	for room in first.deck.hull.rooms:
+		if room.integrity < Hull.ROOM_MAX:
+			damaged_rooms += 1
+	_check(damaged_rooms >= 2 and second.deck.hull.integrity < Hull.HULL_MAX,
+		"The rail bolt damages multiple compartments in order and exits to hit another ship")
+
+
+func _check_flak() -> void:
+	var voyage := _weapon_fixture(0)
+	var enemy := voyage.add_test_enemy(Voyage.Opponent.MISSILE_FIGHTER)
+	enemy.position = voyage.ship_position + Vector2(166, 0)
+	enemy.heading = PI
+	voyage.flight_computer = false
+	voyage.flak_enabled = true
+	voyage._fire_hostile(enemy)
+	_check(voyage.projectiles.size() == 1 and voyage.projectiles[0].hostile,
+		"The missile fighter can launch missiles for point defense practice")
+	var missile := voyage.projectiles[0]
+	voyage._advance_weapons(TICK)
+	_check(voyage.projectiles.size() == 1 and voyage.deck.power.energy == 100.0, "Point defense waits for the flight computer")
+	voyage.flight_computer = true
+	for frame in range(16):
+		voyage._advance_weapons(TICK)
+		if missile.intercepted:
+			break
+	_check(missile.intercepted and voyage.deck.power.energy == 100.0 - Voyage.FLAK.energy_cost
+		and voyage.deck.hull.integrity == Hull.HULL_MAX, "The flak wave intercepts the missile without triggering blast damage")
+	voyage.flak_enabled = false
+
+
+func _check_pusher() -> void:
+	var voyage := _weapon_fixture(5)
+	var enemy := voyage.add_test_enemy(Voyage.Opponent.DRILL)
+	enemy.position = voyage.ship_position + Vector2(138, 13)
+	enemy.heading = PI
+	_check(voyage.fire(), "The impulse weapon generates a pulse")
+	for frame in range(24):
+		voyage._advance_weapons(TICK)
+	_check(enemy.velocity.x > 0.0 and absf(enemy.body.spin) > 0.1 and enemy.deck.hull.integrity == Hull.HULL_MAX - 7.0,
+		"An off-center impulse changes linear and angular velocity and deals slight damage")
 
 
 func _check(value: bool, message: String) -> void:

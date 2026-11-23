@@ -108,6 +108,7 @@ var _grid := AStar2D.new()
 var _bounds := Rect2i()
 var _transits: Array[Transit] = []
 var hull := Hull.new()
+var floor_bounds := Rect2()
 var damage_enabled := true
 var alerts: Dictionary[int, float] = {}
 var emp_timers: Dictionary[int, float] = {}
@@ -222,6 +223,10 @@ func reset(for_flight := false) -> void:
 	emp_timers.clear()
 	power.energy = ShipPower.CAPACITY
 	hull.configure(plan, _door_edges, walls, hatches)
+	var first: Vector2i = hull.room_at.keys()[0]
+	floor_bounds = Rect2(Vector2(first), Vector2.ONE)
+	for tile: Vector2i in hull.room_at:
+		floor_bounds = floor_bounds.expand(Vector2(tile)).expand(Vector2(tile + Vector2i.ONE))
 	engine_health = 1.0 if for_flight else 0.0
 	airlock_progress = 0.0
 	notice = "" if for_flight else "Двигатель отключён. Назначьте ремонт."

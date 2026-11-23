@@ -1,4 +1,4 @@
-import {LIMITS,ROOMS,MODULES,STEPS,WEAPON_TYPES,weaponFields,floor,at,fresh,same,edgeKey,inspectLayout,prune,weaponDefault,validWeapon} from './model.mjs';
+import {LIMITS,ROOMS,MODULES,STEPS,WEAPON_TYPES,weaponFields,floor,at,fresh,same,edgeKey,inspectLayout,prune,weaponDefault,validWeapon,upgradeWeapon} from './model.mjs';
 
 const $ = (id) => document.getElementById(id);
 const element = (tag,text) => {
@@ -314,7 +314,7 @@ function fillWeapon() {
   $('weapon-fields').replaceChildren(...Object.entries(weaponFields(weapon.projectile)).map(([key,[label,min,max]])=>{
     const field=element('label',label);field.className='control-label';
     const input=element('input');input.name=key;input.type='number';input.min=min;input.max=max;
-    input.step=key==='emp_systems'?'1':'any';input.required=true;input.value=weapon[key];
+    input.step=['emp_systems','laser_ticks_per_second','rail_penetration'].includes(key)?'1':'any';input.required=true;input.value=weapon[key];
     field.append(input);return field;
   }));
   $('mounts-list').replaceChildren();weapon.mounts.forEach(mountRow);readWeapon();
@@ -327,7 +327,7 @@ function readWeapon() {
   $('weapon-title').textContent=draft.name||'Без названия';
   $('weapon-stats').replaceChildren(...Object.entries(fields).map(([key,[label]])=>{
     const row=element('div'),value=draft[key];
-    row.append(element('dt',label),element('dd',Number.isFinite(value)?(['breach_chance','emp_edge_strength'].includes(key)?Math.round(value*100)+' %':String(value)):'—'));
+    row.append(element('dt',label),element('dd',Number.isFinite(value)?(['breach_chance','emp_edge_strength','rail_retention'].includes(key)?Math.round(value*100)+' %':String(value)):'—'));
     return row;
   }));
   $('add-mount').disabled=mounts.length>=12;
@@ -347,7 +347,7 @@ weaponForm.onsubmit=event=>{
 };
 $('add-mount').onclick=()=>{if($('mounts-list').children.length<12){mountRow();readWeapon();}};
 $('open-weapon').onclick=()=>$('weapon-file').click();
-openJson('weapon-file',data=>{if(!validWeapon(data))throw new Error('Нужен корректный статблок оружия Eve Offline версии 1.');},data=>{weapon=data;fillWeapon();});
+openJson('weapon-file',data=>{if(!validWeapon(data))throw new Error('Нужен корректный статблок оружия Eve Offline версии 1.');},data=>{weapon=upgradeWeapon(data);fillWeapon();});
 function switchTab(next){
   tab=next;
   for(const item of ['deck','weapon']){
@@ -361,7 +361,7 @@ let hasDraft=false;
 try {
   const saved=JSON.parse(localStorage.getItem(STORAGE));
   if(inspectLayout(saved?.layout).cells){layout=saved.layout;hasDraft=true;}
-  if(validWeapon(saved?.weapon))weapon=saved.weapon;
+  if(validWeapon(saved?.weapon))weapon=upgradeWeapon(saved.weapon);
 } catch { /* A fresh template is still available. */ }
 sync(false);selectTool('paint');fillWeapon();
 if(!hasDraft)loadTemplate(false);

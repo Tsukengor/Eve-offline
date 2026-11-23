@@ -29,6 +29,11 @@ var blast_time := 0.0
 var affected: Dictionary[Physics.Body, bool] = {}
 var contact_body: Physics.Body
 var contact_tile := Deck.INVALID_CELL
+var beam_tick_elapsed := 0.0
+var beam_blocked := false
+var penetrated: Dictionary[Physics.Body, Dictionary] = {}
+var penetration_left := 0
+var intercepted := false
 
 
 func launch(origin: Vector2, direction: Vector2) -> void:

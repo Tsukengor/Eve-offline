@@ -1,0 +1,15 @@
+[gd_resource type="Resource" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://flight/weapon_profile.gd" id="1"]
+[ext_resource type="PackedScene" path="res://flight/kinetic_projectile.tscn" id="2"]
+
+[resource]
+script = ExtResource("1")
+projectile = ExtResource("2")
+kind = 4
+title = "Рельсотрон"
+cooldown = 3.1
+damage = 38.0
+crew_damage = 7.0
+breach_chance = 0.3
+energy_cost = 46.0
