@@ -63,7 +63,6 @@ const BREACH_TONE := preload("res://assets/audio/hull_breach.wav")
 const DOOR_SPRITE := preload("res://assets/deck/bulkhead_door.png")
 const ORIGIN := Vector2(100, 175)
 const CELL := 33.0
-const SCALE := CELL / 44.0
 const TEXT := Color("#e3edf6")
 const MUTED := Color("#a1b4c9")
 const LINE := Color("#30465c")
@@ -79,6 +78,8 @@ const WEAPONS_COLOR := Color("#d6a4fa")
 var _font := ThemeDB.fallback_font
 var _selected := 1
 var _hovered_cell := DeckSimulation.INVALID_CELL
+var _deck_origin := ORIGIN
+var _deck_cell := CELL
 var _pause_button: Button
 var _crew_buttons: Array[Button] = []
 var _crew_selected_styles: Array[StyleBoxFlat] = []
@@ -176,6 +177,15 @@ func _reset() -> void:
 
 
 func _refresh() -> void:
+	if simulation.layout_path == DeckSimulation.RESCUE_LAYOUT:
+		_deck_origin = ORIGIN
+		_deck_cell = CELL
+	elif not simulation.plan.is_empty():
+		var size := Vector2(simulation.plan[0].length(), simulation.plan.size())
+		_deck_cell = minf(CELL, minf(636.0 / size.x, 409.0 / size.y))
+		_deck_origin = Vector2(389, 386) - size * _deck_cell * 0.5
+	if simulation.tile_kind(_hovered_cell) == ".":
+		_hovered_cell = DeckSimulation.INVALID_CELL
 	var pause_title := "Продолжить" if get_tree().paused else "Пауза"
 	if _pause_button.text != pause_title:
 		_pause_button.text = pause_title
@@ -205,7 +215,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 	if event is InputEventMouse:
 		var point: Vector2 = get_global_transform_with_canvas().affine_inverse() * event.position
-		var tile := Vector2i(((point - ORIGIN) / CELL).floor())
+		var tile := Vector2i(((point - _deck_origin) / _deck_cell).floor())
 		if event is InputEventMouseMotion:
 			var hovered := tile if simulation.tile_kind(tile) != "." else DeckSimulation.INVALID_CELL
 			if hovered != _hovered_cell:
@@ -224,15 +234,15 @@ func _select_or_toggle(point: Vector2, automatic: bool) -> void:
 	for edge in simulation.doors:
 		var start := _cell_center(Vector2i(edge.x, edge.y))
 		var normal := Vector2(edge.z - edge.x, edge.w - edge.y)
-		var offset := point - (start + normal * CELL * 0.5)
-		if absf(offset.dot(normal)) <= 6.0 and absf(offset.dot(normal.orthogonal())) <= CELL * 0.5:
+		var offset := point - (start + normal * _deck_cell * 0.5)
+		if absf(offset.dot(normal)) <= 6.0 and absf(offset.dot(normal.orthogonal())) <= _deck_cell * 0.5:
 			if automatic:
 				simulation.set_automatic(edge)
 			else:
 				simulation.toggle_door(edge)
 			return
 	var closest := -1
-	var distance := 15.0
+	var distance := _deck_cell * 0.45
 	for index in range(simulation.crew.size()):
 		var member := simulation.crew[index]
 		if member.health <= 0.0:
@@ -253,6 +263,8 @@ func _draw() -> void:
 		_text("На паузе", Vector2(54, 160), 15, AMBER)
 	elif simulation.simulation_speed < 1.0:
 		_text("Время 0,25×", Vector2(54, 160), 15, AMBER)
+	if simulation.layout_path != DeckSimulation.RESCUE_LAYOUT:
+		_text(simulation.layout_name, Vector2(54, 190), 15, MUTED)
 	_text("Экипаж", Vector2(792, 164), 21)
 	_draw_deck()
 
@@ -282,7 +294,7 @@ func _draw_floor() -> void:
 			var kind := simulation.tile_kind(tile)
 			if kind == ".":
 				continue
-			var bounds := Rect2(ORIGIN + Vector2(tile) * CELL, Vector2.ONE * CELL)
+			var bounds := Rect2(_deck_origin + Vector2(tile) * _deck_cell, Vector2.ONE * _deck_cell)
 			var tint := Color.WHITE
 			if kind == "L":
 				tint = Color("#839ab0")
@@ -310,18 +322,19 @@ func _draw_floor() -> void:
 				var neighbour := simulation.tile_kind(tile + direction)
 				if neighbour == ".":
 					_draw_floor_edge(tile, direction, WALL_TRIM, 5.0, 2.5)
-				elif neighbour != kind and (direction == Vector2i.RIGHT or direction == Vector2i.DOWN):
+				elif direction == Vector2i.RIGHT or direction == Vector2i.DOWN:
 					var edge := simulation.edge_between(tile, tile + direction)
 					var has_door := simulation.doors.has(edge)
-					_draw_floor_edge(tile, direction, FLOOR_THRESHOLD if has_door else WALL_TRIM, 5.0, 0.0)
+					if neighbour != kind or edge in simulation.walls or has_door:
+						_draw_floor_edge(tile, direction, FLOOR_THRESHOLD if has_door else WALL_TRIM, 5.0, 0.0)
 
 
 func _draw_floor_edge(tile: Vector2i, direction: Vector2i, sprite: Texture2D,
 		width: float, inset: float) -> void:
 	var normal := Vector2(direction)
-	var center := _cell_center(tile) + normal * (CELL * 0.5 - inset)
+	var center := _cell_center(tile) + normal * (_deck_cell * 0.5 - inset)
 	draw_set_transform(center, normal.angle() + PI * 0.5)
-	draw_texture_rect(sprite, Rect2(-CELL * 0.5, -width * 0.5, CELL, width), false)
+	draw_texture_rect(sprite, Rect2(-_deck_cell * 0.5, -width * 0.5, _deck_cell, width), false)
 	draw_set_transform(Vector2.ZERO)
 
 
@@ -334,17 +347,18 @@ func _draw_deck() -> void:
 	_draw_module(simulation.engine_tile, ENGINE_SPRITE, DANGER if simulation.engine_health < 1.0 else ACCENT)
 	_draw_module(simulation.airlock_tile, AIRLOCK_SPRITE, ACCENT if simulation.airlock_progress >= 1.0 else AMBER)
 	_draw_module(simulation.weapons_tile, WEAPONS_SPRITE, WEAPONS_COLOR if simulation.weapons_are_manned() else MUTED)
-	_text("МОСТИК", Vector2(134, 200), 12, MUTED)
-	_text("РЕАКТОР", Vector2(331, 200), 12, MUTED)
-	_text("МАШИННОЕ ОТДЕЛЕНИЕ", Vector2(463, 200), 12, MUTED)
-	_text("ВООРУЖЕНИЕ", Vector2(134, 590), 12, MUTED)
-	_text("КИСЛОРОД", Vector2(301, 590), 12, MUTED)
-	_text("СПАСАТЕЛЬНЫЙ ШЛЮЗ", Vector2(463, 590), 12, MUTED)
+	if simulation.layout_path == DeckSimulation.RESCUE_LAYOUT:
+		_text("МОСТИК", Vector2(134, 200), 12, MUTED)
+		_text("РЕАКТОР", Vector2(331, 200), 12, MUTED)
+		_text("МАШИННОЕ ОТДЕЛЕНИЕ", Vector2(463, 200), 12, MUTED)
+		_text("ВООРУЖЕНИЕ", Vector2(134, 590), 12, MUTED)
+		_text("КИСЛОРОД", Vector2(301, 590), 12, MUTED)
+		_text("СПАСАТЕЛЬНЫЙ ШЛЮЗ", Vector2(463, 590), 12, MUTED)
 	_draw_module(simulation.life_support_tile, LIFE_SUPPORT_SPRITE, ACCENT)
 	_draw_module(simulation.reactor_tile, REACTOR_SPRITE, AMBER if simulation.operator_at(DeckSimulation.WorkPose.REACTOR) == null else ACCENT)
 	for tile in simulation.hull.breaches:
 		_draw_sprite(BREACH_SPRITE, _cell_center(tile), 27.0)
-		_draw_sprite(AIR_LEAK, _cell_center(tile) + Vector2(3, -9), 21.0, Color(1, 1, 1, 0.65))
+		_draw_sprite(AIR_LEAK, _cell_center(tile) + Vector2(3, -9) * _deck_cell / CELL, 21.0, Color(1, 1, 1, 0.65))
 
 	var selected := simulation.crew[_selected]
 	var path := PackedVector2Array([_crew_point(selected)])
@@ -354,14 +368,14 @@ func _draw_deck() -> void:
 		path.append(_cell_center(tile))
 	if path.size() > 1:
 		draw_polyline(path, selected.color, 2.0, true)
-		draw_circle(path[-1], 4.0, selected.color, true, -1.0, true)
+		draw_circle(path[-1], 4.0 * _deck_cell / CELL, selected.color, true, -1.0, true)
 	if selected.health > 0.0 and selected.blocked:
-		draw_arc(_cell_center(selected.target), 16.0, 0.0, TAU, 28, DANGER, 2.0, true)
+		draw_arc(_cell_center(selected.target), 16.0 * _deck_cell / CELL, 0.0, TAU, 28, DANGER, 2.0, true)
 
 	var selected_point := _crew_point(selected)
 	if selected.health > 0.0:
-		draw_circle(selected_point, 11.0, Color("#142535"), true, -1.0, true)
-		draw_arc(selected_point, 11.0, 0.0, TAU, 30, selected.color, 2.0, true)
+		draw_circle(selected_point, 11.0 * _deck_cell / CELL, Color("#142535"), true, -1.0, true)
+		draw_arc(selected_point, 11.0 * _deck_cell / CELL, 0.0, TAU, 30, selected.color, 2.0, true)
 	for index in range(simulation.crew.size()):
 		_draw_crew_member(index)
 
@@ -384,7 +398,7 @@ func _draw_crew_member(index: int) -> void:
 			atlas = GUNNER_WORK
 			var row := 0.0 if pose == DeckSimulation.WorkPose.REPAIR else 1.0
 			source.position = Vector2(WORK_DIRECTIONS.find(direction), row) * WORK_FRAME
-		var extent := Vector2.ONE * 27.0
+		var extent := Vector2.ONE * 27.0 * _deck_cell / CELL
 		draw_texture_rect_region(atlas, Rect2(point - extent * 0.5, extent), source)
 		return
 	var sprite: Texture2D = SQUEEZE_SPRITES[index] if member.squeeze > 0.12 else CREW_SPRITES[index]
@@ -397,7 +411,7 @@ func _draw_crew_member(index: int) -> void:
 func _draw_door(edge: Vector4i, door: DeckSimulation.Door) -> void:
 	var center_a := _cell_center(Vector2i(edge.x, edge.y))
 	var center_b := _cell_center(Vector2i(edge.z, edge.w))
-	draw_set_transform((center_a + center_b) * 0.5, (center_b - center_a).angle(), Vector2.ONE * SCALE)
+	draw_set_transform((center_a + center_b) * 0.5, (center_b - center_a).angle(), Vector2.ONE * _deck_cell / 44.0)
 	var center := Vector2.ZERO
 	var openness := door.openness
 	var sprite_size := DOOR_SPRITE.get_size()
@@ -405,8 +419,11 @@ func _draw_door(edge: Vector4i, door: DeckSimulation.Door) -> void:
 	var pixels := sprite_size.y * leaf_height / 42.0
 	var half_height := sprite_size.y * 0.5
 	var width := sprite_size.x * 42.0 / sprite_size.y
+	var exterior := edge in simulation.hatches
 	var tint := Color.WHITE.lerp(Color("#a4e3d4"), openness)
-	if not door.automatic and not door.wants_open:
+	if exterior:
+		tint = AMBER if openness < 1.0 else DANGER
+	elif not door.automatic and not door.wants_open:
 		tint = Color("#f28b79")
 	var left := center.x - width * 0.5
 	draw_texture_rect_region(DOOR_SPRITE, Rect2(left, center.y - 21.0, width, leaf_height),
@@ -414,24 +431,31 @@ func _draw_door(edge: Vector4i, door: DeckSimulation.Door) -> void:
 	draw_texture_rect_region(DOOR_SPRITE, Rect2(left, center.y + 21.0 - leaf_height, width, leaf_height),
 		Rect2(0.0, half_height, sprite_size.x, pixels), tint)
 	draw_set_transform(Vector2.ZERO)
+	if exterior and openness >= 1.0:
+		var interior := Vector2i(edge.x, edge.y)
+		var outside := center_b
+		if simulation.tile_kind(interior) == ".":
+			outside = center_a
+		_draw_sprite(AIR_LEAK, outside, 18.0, Color(1, 1, 1, 0.7))
 
 
 func _draw_module(tile: Vector2i, sprite: Texture2D, tint: Color) -> void:
 	var center := _cell_center(tile)
-	var box := Rect2(center - Vector2(15, 15), Vector2(30, 30))
+	var scale := _deck_cell / CELL
+	var box := Rect2(center - Vector2(15, 15) * scale, Vector2(30, 30) * scale)
 	var condition := simulation.hull.condition(tile)
 	var rim := tint.lerp(DANGER, 1.0 - condition)
 	draw_rect(box, rim.darkened(0.78))
 	_draw_sprite(sprite, center, 28.0, Color.WHITE.darkened((1.0 - condition) * 0.45))
 	draw_rect(box, rim, false, 1)
 	if condition < 0.9:
-		_draw_sprite(DAMAGE_SPRITE, center + Vector2(12, -12), 12.0)
-		draw_line(box.end - Vector2(28, 2), box.end - Vector2(28 - 26 * condition, 2), rim, 2.0)
+		_draw_sprite(DAMAGE_SPRITE, center + Vector2(12, -12) * scale, 12.0)
+		draw_line(box.end - Vector2(28, 2) * scale, box.end - Vector2(28 - 26 * condition, 2) * scale, rim, 2.0)
 
 
 func _draw_sprite(sprite: Texture2D, center: Vector2, longest_side: float, tint := Color.WHITE) -> void:
 	var size := sprite.get_size()
-	var extent := size * (longest_side / maxf(size.x, size.y))
+	var extent := size * (longest_side * _deck_cell / CELL / maxf(size.x, size.y))
 	draw_texture_rect(sprite, Rect2(center - extent * 0.5, extent), false, tint)
 
 
@@ -444,13 +468,13 @@ func _draw_meter(title: String, progress: float, y: float, tint: Color) -> void:
 
 
 func _cell_center(tile: Vector2i) -> Vector2:
-	return ORIGIN + (Vector2(tile) + Vector2(0.5, 0.5)) * CELL
+	return _deck_origin + (Vector2(tile) + Vector2(0.5, 0.5)) * _deck_cell
 
 
 func _crew_point(member: DeckSimulation.CrewMember) -> Vector2:
-	var point := ORIGIN + (member.position + Vector2(0.5, 0.5)) * CELL
+	var point := _deck_origin + (member.position + Vector2(0.5, 0.5)) * _deck_cell
 	if simulation.workstation_pose(member) != DeckSimulation.WorkPose.NONE:
-		point += Vector2(member.target - member.cell) * 5.0
+		point += Vector2(member.target - member.cell) * 5.0 * _deck_cell / CELL
 	return point
 
 

@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="Редактор палуб и игровых статблоков Eve Offline">
+  <title>Верфь · Eve Offline</title>
+  <link rel="stylesheet" href="./style.css"><script type="module" src="./app.mjs"></script>
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="brand-mark" aria-hidden="true">◈</span><span>EVE OFFLINE<small>Верфь</small></span></div>
+  <nav aria-label="Редакторы">
+    <button id="deck-tab" aria-pressed="true">Планировка</button><button id="weapon-tab" aria-pressed="false">Оружие</button>
+  </nav>
+  <a href="https://github.com/Tsukengor/Eve-offline">Репозиторий</a>
+</header>
+<main>
+  <section id="deck-editor">
+    <div class="heading">
+      <div><h1>Палуба корабля</h1><label class="ship-name"><span class="visually-hidden">Имя корабля</span><input id="name" maxlength="40" placeholder="Название корабля"></label></div>
+      <div class="actions"><button id="open">Открыть JSON</button><button id="export" class="primary">Скачать JSON</button></div>
+    </div>
+    <div class="editor">
+      <aside class="toolbox">
+        <h2>Инструменты</h2>
+        <div class="tools" id="tools"></div>
+        <label class="control-label" id="palette-label">Тип отсека<select id="palette"></select></label>
+        <div class="templates">
+          <label class="control-label">Шаблон<select id="template">
+            <option value="rescue">Спасательный корабль</option><option value="drill">Бур</option><option value="fighter">Истребитель</option>
+          </select></label>
+          <div class="row"><button id="load-template">Загрузить</button><button id="new-deck">Новая</button></div>
+        </div>
+      </aside>
+      <section class="viewport" aria-label="Редактирование плана">
+        <div class="viewport-bar"><span>ПЛАН ПАЛУБЫ</span><div class="row history"><button id="undo" title="Отменить (Ctrl+Z)">↶</button><button id="redo" title="Повторить (Ctrl+Shift+Z)">↷</button></div></div>
+        <div class="drawing"><canvas id="board" tabindex="0" aria-label="Сетка палубы. Стрелки перемещают курсор, Enter применяет инструмент. Для границ используют стороны С, В, Ю, З в панели справа."></canvas></div>
+        <div class="viewport-foot"><span id="coordinates"></span><span id="dimensions"></span></div>
+      </section>
+      <aside class="inspector">
+        <h2>Параметры палубы</h2>
+        <div class="size">
+          <label class="control-label">Ширина<input type="number" id="width" min="1" max="24"></label>
+          <label class="control-label">Высота<input type="number" id="height" min="1" max="18"></label>
+          <button id="resize" class="wide">Изменить сетку</button>
+        </div>
+        <div class="edge-controls" id="edge-controls" hidden><p>Сторона выбранной клетки</p><div class="row" id="sides"></div></div>
+        <div class="legend"><h2>Отсеки</h2><div id="legend"></div></div>
+        <div id="validation" class="validation" aria-live="polite"></div>
+      </aside>
+    </div>
+    <p class="footer-note">Внутренние двери соединяют клетки пола. Для наружной двери выберите границу между полом и пустотой.</p>
+    <input id="layout-file" type="file" hidden accept=".json,application/json">
+  </section>
+  <section id="weapon-editor" hidden>
+    <div class="heading"><div><h1>Статблок оружия</h1><p>Параметры кинетического орудия</p></div>
+    <div class="actions"><button id="open-weapon">Открыть JSON</button><button form="weapon-form" class="primary">Скачать JSON</button></div></div>
+    <div class="weapon-layout">
+      <form id="weapon-form" class="weapon-form">
+        <label class="control-label">Название<input id="weapon-name" name="weapon-name" maxlength="40" required></label>
+        <label class="control-label">Тип снаряда<select name="projectile"><option value="kinetic">Кинетический</option></select></label>
+        <div class="weapon-grid" id="weapon-fields"></div>
+        <div class="mounts"><h2>Точки вылета</h2><p>Координаты относительно спрайта. Если список пуст, применяется вылет у носа.</p><div id="mounts-list"></div><button type="button" id="add-mount">Добавить точку</button></div>
+      </form>
+      <aside class="weapon-preview"><div class="viewport-bar">ПРЕДПРОСМОТР</div><h2 id="weapon-title"></h2><dl id="weapon-stats"></dl><p id="weapon-status" role="status"></p></aside>
+    </div>
+    <input id="weapon-file" type="file" hidden accept=".json,application/json">
+  </section>
+</main>
+<div id="status" class="toast" role="status" hidden></div>
+</body>
+</html>

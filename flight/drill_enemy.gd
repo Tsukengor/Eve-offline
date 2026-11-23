@@ -10,7 +10,7 @@ var _retreat_age := 0.0
 
 
 func _configure_deck() -> void:
-	deck.use_drill_deck()
+	deck.layout_path = DeckSimulation.DRILL_LAYOUT
 
 
 func _steer(delta: float, target_position: Vector2, target_velocity: Vector2) -> void:

@@ -26,6 +26,7 @@ func _run() -> void:
 	_test_door_safety()
 	_test_automatic_door()
 	_test_layout_connectivity()
+	_test_imported_layout()
 	_test_wait_for_empty_destination()
 	_test_swap()
 	_test_pass_stationary()
@@ -166,6 +167,42 @@ func _test_layout_connectivity() -> void:
 		var b := Vector2i(edge.z, edge.w)
 		_check(a.distance_squared_to(b) == 1 and _sim.hull.room_at.has(a) and _sim.hull.room_at.has(b),
 			"Doors sit between floor tiles and do not occupy a cell")
+
+
+func _test_imported_layout() -> void:
+	var data: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(_sim.RESCUE_LAYOUT))
+	data.name = "Испытательная палуба"
+	data.edges.append({"kind": "hatch", "a": [1, 1], "b": [0, 1]})
+	data.edges.append({"kind": "wall", "a": [1, 1], "b": [2, 1]})
+	var path := "user://deck_import_regression.json"
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	file.store_string(JSON.stringify(data))
+	file.close()
+	_check(_sim.load_layout(path).is_empty() and _sim.layout_name == data.name,
+		"The game can load the deck editor's versioned JSON")
+	var hatch := Vector4i(0, 1, 1, 1)
+	var inside := Vector2i(1, 1)
+	_check(not _sim.doors[hatch].automatic and _sim._path(inside, Vector2i(2, 1)).size() > 2,
+		"Exterior doors default to manual and interior walls block their direct edge")
+	_sim.set_automatic(hatch)
+	_check(not _sim.doors[hatch].automatic, "Exterior doors cannot be made automatic")
+	_sim.toggle_door(hatch)
+	_tick(90)
+	_check(_sim.hull.oxygen_at(inside) < 0.6 and _sim.hull.oxygen_at(_sim.engine_tile) == 1.0,
+		"An open exterior door leaks only its compartment while internal doors are shut")
+	_check(_sim._path(inside, Vector2i(0, 1)).is_empty(), "An exterior door never leads to a walkable tile")
+	_sim.toggle_door(hatch)
+	var oxygen := _sim.hull.oxygen_at(inside)
+	_tick(35)
+	_check(_sim.hull.oxygen_at(inside) > oxygen, "Closing the exterior door stops the leak")
+
+	data.edges.pop_front()
+	file = FileAccess.open(path, FileAccess.WRITE)
+	file.store_string(JSON.stringify(data))
+	file.close()
+	_check(not _sim.load_layout(path).is_empty() and _sim.layout_name == "Испытательная палуба",
+		"Rejecting an isolated compartment preserves the active deck")
+	_check(_sim.load_layout(_sim.RESCUE_LAYOUT, false).is_empty(), "Restore the default deck after importing")
 
 
 func _test_wait_for_empty_destination() -> void:

@@ -5,6 +5,7 @@ const HULL_MAX := 140.0
 const ROOM_MAX := 100.0
 const LOW_OXYGEN := 0.20
 const LEAK_RATE := 0.23
+const HATCH_LEAK_RATE := 0.48
 const REFILL_RATE := 0.065
 const EXCHANGE_RATE := 0.52
 
@@ -19,14 +20,17 @@ var rooms: Array[Room] = []
 var room_at: Dictionary[Vector2i, int] = {}
 var breaches: Dictionary[Vector2i, float] = {}
 var integrity := HULL_MAX
+var _vacuum_connections: Dictionary[Vector4i, int] = {}
 var _door_connections: Dictionary[Vector4i, Vector2i] = {}
 
 
-func configure(plan: Array, door_edges: Array) -> void:
+func configure(plan: Array, door_edges: Array, walls: Array = [], hatches: Array = []) -> void:
 	rooms.clear()
 	room_at.clear()
 	breaches.clear()
 	_door_connections.clear()
+	_vacuum_connections.clear()
+	var closed := door_edges + walls
 	integrity = HULL_MAX
 	var kinds: Dictionary[Vector2i, String] = {}
 	for y in range(plan.size()):
@@ -47,7 +51,7 @@ func configure(plan: Array, door_edges: Array) -> void:
 			room.tiles.append(tile)
 			for step: Vector2i in STEPS:
 				var other := tile + step
-				if kinds.get(other, "") == kinds[cell] and not room_at.has(other) and edge_between(tile, other) not in door_edges:
+				if kinds.get(other, "") == kinds[cell] and not room_at.has(other) and edge_between(tile, other) not in closed:
 					room_at[other] = index
 					pending.append(other)
 	for edge: Vector4i in door_edges:
@@ -55,6 +59,11 @@ func configure(plan: Array, door_edges: Array) -> void:
 		var b: int = room_at[Vector2i(edge.z, edge.w)]
 		if a != b:
 			_door_connections[edge] = Vector2i(mini(a, b), maxi(a, b))
+
+	for edge: Vector4i in hatches:
+		var a := Vector2i(edge.x, edge.y)
+		var b := Vector2i(edge.z, edge.w)
+		_vacuum_connections[edge] = room_at[a] if room_at.has(a) else room_at[b]
 
 
 static func edge_between(a: Vector2i, b: Vector2i) -> Vector4i:
@@ -119,6 +128,9 @@ func advance_air(delta: float, open_doors: Array[Vector4i], life_support: float)
 		var exchange := (a.oxygen - b.oxygen) * EXCHANGE_RATE * delta * mini(a.tiles.size(), b.tiles.size())
 		changes[pair.x] -= exchange / a.tiles.size()
 		changes[pair.y] += exchange / b.tiles.size()
+	for edge in open_doors:
+		if _vacuum_connections.has(edge):
+			changes[_vacuum_connections[edge]] -= HATCH_LEAK_RATE * delta
 	for tile in breaches:
 		changes[room_at[tile]] -= LEAK_RATE * delta
 	var updated := false

@@ -9,53 +9,10 @@ const Hull = preload("res://deck/hull.gd")
 const ShipPower = preload("res://deck/ship_power.gd")
 enum WorkPose { NONE, HELM, REPAIR, AIRLOCK, WEAPONS, LIFE_SUPPORT, REACTOR }
 
-const PLAN := [
-	".................",
-	".BBBB..RRR.EEEE..",
-	".BBBB..RRR.EEEE..",
-	".BBBB..RRR.EEEE..",
-	"...C....C....C...",
-	"..CCCCCCCCCCCCC..",
-	"..C...........C..",
-	"..CCCCCCCCCCCCC..",
-	"..C....C.....C...",
-	".WWWW.LLLL.SSSS..",
-	".WWWW.LLLL.SSSS..",
-	".WWWW.LLLL.SSSS..",
-	".................",
-]
-# The top of the deck is the nose, as on the exterior sprite.
-const DRILL_PLAN := [
-	"....WW....",
-	"...WWWW...",
-	"...WWWW...",
-	"..WWWWWW..",
-	"..WWWWWW..",
-	"....CC....",
-	"..SSCCLL..",
-	"..SSCCLL..",
-	"..EECCBB..",
-	"..EECCBB..",
-	"..EECCBB..",
-	"....RR....",
-	"....RR....",
-]
-const FIGHTER_PLAN := [
-	"..WW..",
-	"..WW..",
-	"..CC..",
-	"SSCCLL",
-	"SSCCLL",
-	"EECCBB",
-	"EECCBB",
-	"EECCBB",
-	"..RR..",
-	"..RR..",
-]
-const RESCUE_DOORS := [
-	Vector4i(3, 3, 3, 4), Vector4i(13, 3, 13, 4), Vector4i(2, 8, 2, 9),
-	Vector4i(7, 8, 7, 9), Vector4i(13, 8, 13, 9), Vector4i(8, 3, 8, 4),
-]
+const ShipLayout = preload("res://deck/ship_layout.gd")
+const RESCUE_LAYOUT := "res://deck/layouts/rescue.json"
+const DRILL_LAYOUT := "res://deck/layouts/drill.json"
+const FIGHTER_LAYOUT := "res://deck/layouts/fighter.json"
 const ENGINE := Vector2i(12, 3)
 const BRIDGE := Vector2i(2, 2)
 const HELM_SEAT := BRIDGE + Vector2i.DOWN
@@ -126,7 +83,12 @@ class Transit:
 	var distance := 0.0
 
 
-var plan: Array = PLAN
+var plan: Array = []
+@export_file("*.json") var layout_path := RESCUE_LAYOUT
+var layout_name := ""
+var walls: Array = []
+var hatches: Array = []
+var _spawns: Array = []
 var engine_tile := ENGINE
 var bridge_tile := BRIDGE
 var airlock_tile := AIRLOCK
@@ -141,7 +103,7 @@ var doors: Dictionary[Vector4i, Door] = {}
 var engine_health := 0.0
 var airlock_progress := 0.0
 var notice := ""
-var _door_edges: Array = RESCUE_DOORS
+var _door_edges: Array = []
 var _grid := AStar2D.new()
 var _bounds := Rect2i()
 var _transits: Array[Transit] = []
@@ -151,54 +113,46 @@ var alerts: Dictionary[int, float] = {}
 var _rng := RandomNumberGenerator.new()
 
 
-func use_drill_deck() -> void:
-	_set_layout(DRILL_PLAN, Vector2i(2, 8), Vector2i(6, 8), Vector2i(2, 6), Vector2i(4, 2), Vector2i(7, 6), Vector2i(4, 11), [
-		Vector4i(4, 4, 4, 5), Vector4i(3, 6, 4, 6), Vector4i(5, 6, 6, 6),
-		Vector4i(3, 9, 4, 9), Vector4i(5, 9, 6, 9), Vector4i(5, 10, 5, 11),
-	])
-
-
-func use_fighter_deck() -> void:
-	_set_layout(FIGHTER_PLAN, Vector2i(0, 5), Vector2i(4, 5), Vector2i(0, 3), Vector2i(2, 0), Vector2i(5, 3), Vector2i(2, 8), [
-		Vector4i(3, 1, 3, 2), Vector4i(1, 3, 2, 3), Vector4i(3, 3, 4, 3),
-		Vector4i(1, 6, 2, 6), Vector4i(3, 6, 4, 6), Vector4i(3, 7, 3, 8),
-	])
-
-
-func _set_layout(new_plan: Array, engine: Vector2i, bridge: Vector2i, airlock: Vector2i,
-		weapons: Vector2i, support: Vector2i, reactor: Vector2i, edges: Array) -> void:
-	plan = new_plan
-	engine_tile = engine
-	bridge_tile = bridge
-	airlock_tile = airlock
-	weapons_tile = weapons
-	life_support_tile = support
-	reactor_tile = reactor
-	module_cells = [engine, bridge, airlock, weapons, support, reactor]
-	_door_edges = edges
-
-
 static func edge_between(a: Vector2i, b: Vector2i) -> Vector4i:
 	return Hull.edge_between(a, b)
 
 
 func _ready() -> void:
-	assert(not plan.is_empty() and not plan[0].is_empty(), "The deck plan must contain tiles")
-	for row: String in plan:
-		assert(row.length() == plan[0].length(), "Deck rows must have equal width")
+	var error := load_layout(layout_path, false)
+	if not error.is_empty():
+		push_error(error)
+		if layout_path != RESCUE_LAYOUT:
+			load_layout(RESCUE_LAYOUT, false)
+
+
+## Loads a scenario deck atomically. Call before starting the scenario.
+func load_layout(path: String, for_flight := true) -> String:
+	var layout := ShipLayout.read(path)
+	if layout.has("error"):
+		return layout.error
+	layout_path = path
+	layout_name = layout.name
+	plan = layout.plan
+	walls = layout.walls
+	hatches = layout.hatches
+	_spawns = layout.spawns
+	_door_edges = layout.doors
+	bridge_tile = layout.modules.bridge
+	engine_tile = layout.modules.engine
+	airlock_tile = layout.modules.airlock
+	weapons_tile = layout.modules.weapons
+	life_support_tile = layout.modules.life_support
+	reactor_tile = layout.modules.reactor
+	module_cells = layout.modules.values()
 	_bounds = Rect2i(0, 0, plan[0].length(), plan.size())
+	doors.clear()
 	for edge: Vector4i in _door_edges:
-		var a := Vector2i(edge.x, edge.y)
-		var b := Vector2i(edge.z, edge.w)
-		assert(a.distance_squared_to(b) == 1 and tile_kind(a) != "." and tile_kind(b) != "."
-			and a not in module_cells and b not in module_cells,
-			"A door must join two adjacent floor tiles: %s" % str(edge))
 		doors[edge] = Door.new(false)
-	var unreachable := _build_navigation()
-	if not unreachable.is_empty():
-		push_error("Unreachable deck tiles: %s" % str(unreachable))
-		assert(false, "Deck layout must be connected with all doors open")
-	reset()
+	for edge: Vector4i in hatches:
+		doors[edge] = Door.new(false)
+	_build_navigation()
+	reset(for_flight)
+	return ""
 
 
 func _id(tile: Vector2i) -> int:
@@ -241,15 +195,15 @@ func _build_navigation() -> Array[Vector2i]:
 func joined(a: Vector2i, b: Vector2i) -> bool:
 	var kind := tile_kind(a)
 	return a.distance_squared_to(b) == 1 and kind != "." and tile_kind(b) != "." \
-		and (kind == tile_kind(b) or doors.has(edge_between(a, b)))
+		and (kind == tile_kind(b) or doors.has(edge_between(a, b))) and edge_between(a, b) not in walls
 
 
 func reset(for_flight := false) -> void:
 	crew.assign([
-		CrewMember.new("Мира", "Пилот", Color("#90c8ff"), bridge_tile + Vector2i.DOWN),
-		CrewMember.new("Лев", "Инженер", Color("#f7bf79"), engine_tile + (Vector2i.UP if plan == PLAN else Vector2i.DOWN)),
-		CrewMember.new("Ника", "Спасатель", Color("#78ead0"), airlock_tile + Vector2i.DOWN),
-		CrewMember.new("Ива", "Наводчик", Color("#d6a4fa"), weapons_tile + Vector2i.DOWN),
+		CrewMember.new("Мира", "Пилот", Color("#90c8ff"), _spawns[0]),
+		CrewMember.new("Лев", "Инженер", Color("#f7bf79"), _spawns[1]),
+		CrewMember.new("Ника", "Спасатель", Color("#78ead0"), _spawns[2]),
+		CrewMember.new("Ива", "Наводчик", Color("#d6a4fa"), _spawns[3]),
 	])
 	for index in range(crew.size()):
 		assert(_grid.has_point(_id(crew[index].cell)) and tile_kind(crew[index].cell) == ["B", "E", "S", "W"][index],
@@ -262,9 +216,10 @@ func reset(for_flight := false) -> void:
 	for edge in doors:
 		_update_edge(edge, true)
 		doors[edge] = Door.new(false)
+		doors[edge].automatic = edge not in hatches
 	alerts.clear()
 	power.energy = ShipPower.CAPACITY
-	hull.configure(plan, _door_edges)
+	hull.configure(plan, _door_edges, walls, hatches)
 	engine_health = 1.0 if for_flight else 0.0
 	airlock_progress = 0.0
 	notice = "" if for_flight else "Двигатель отключён. Назначьте ремонт."
@@ -424,7 +379,7 @@ func toggle_door(edge: Vector4i) -> void:
 
 
 func set_automatic(edge: Vector4i) -> void:
-	if not doors.has(edge):
+	if not doors.has(edge) or edge in hatches:
 		return
 	doors[edge].automatic = true
 	_update_edge(edge, true)
@@ -434,6 +389,8 @@ func set_automatic(edge: Vector4i) -> void:
 
 
 func _update_edge(edge: Vector4i, connected: bool) -> void:
+	if edge in hatches:
+		return
 	var a := _id(Vector2i(edge.x, edge.y))
 	var b := _id(Vector2i(edge.z, edge.w))
 	if connected and not _grid.are_points_connected(a, b):
@@ -532,7 +489,7 @@ func _path_to_order(member: CrewMember, start: Vector2i) -> Array[Vector2i]:
 	var best_cost := INF
 	for direction in CARDINAL_STEPS:
 		var tile: Vector2i = member.target + direction
-		if tile_kind(member.target) != tile_kind(tile) or not _goal_available(tile, member, false):
+		if edge_between(member.target, tile) in walls or tile_kind(member.target) != tile_kind(tile) or not _goal_available(tile, member, false):
 			continue
 		var path := _path(start, tile)
 		if path.is_empty():
@@ -726,7 +683,7 @@ func _advance_doors(delta: float) -> bool:
 		door.openness = move_toward(door.openness, goal, delta / DOOR_SECONDS)
 		updated = true
 		if door.openness == goal and not door.automatic:
-			notice = "Дверь открыта." if door.wants_open else "Дверь закрыта."
+			notice = "Наружная дверь открыта. Утечка кислорода." if edge in hatches and door.wants_open else ("Дверь открыта." if door.wants_open else "Дверь закрыта.")
 			if door.wants_open:
 				opened = true
 	if opened:

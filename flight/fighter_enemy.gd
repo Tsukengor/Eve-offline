@@ -10,7 +10,7 @@ var _maneuver_time := 0.0
 
 
 func _configure_deck() -> void:
-	deck.use_fighter_deck()
+	deck.layout_path = DeckSimulation.FIGHTER_LAYOUT
 
 
 func _steer(delta: float, target_position: Vector2, target_velocity: Vector2) -> void:

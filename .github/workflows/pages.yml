@@ -1,0 +1,39 @@
+name: Верфь · GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths: [web/**, deck/layouts/*.json, tests/shipyard.test.mjs, .github/workflows/pages.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: shipyard-pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Test shipyard and prepare site
+        run: |
+          node --test tests/shipyard.test.mjs
+          cp -R web "$RUNNER_TEMP/shipyard"
+          mkdir "$RUNNER_TEMP/shipyard/layouts"
+          cp deck/layouts/*.json "$RUNNER_TEMP/shipyard/layouts/"
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: ${{ runner.temp }}/shipyard
+      - uses: actions/deploy-pages@v4
+        id: deploy
