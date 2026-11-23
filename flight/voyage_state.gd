@@ -5,12 +5,17 @@ signal changed
 const DeckSimulation = preload("res://deck/deck_simulation.gd")
 const WeaponProfile = preload("res://flight/weapon_profile.gd")
 const Projectile = preload("res://flight/projectile.gd")
+const Weapons = preload("res://flight/weapon_combat.gd")
 const EnemyShip = preload("res://flight/enemy_ship.gd")
 const Physics = preload("res://flight/ship_physics.gd")
 const RESCUE_MODEL = preload("res://flight/models/rescue_ship.tres")
 const STATION_MODEL = preload("res://flight/models/station.tres")
 const DRILL_SCENE := preload("res://flight/drill_enemy.tscn")
 const FIGHTER_SCENE := preload("res://flight/fighter_enemy.tscn")
+const TEST_WEAPONS := [
+	preload("res://flight/kinetic_weapon.tres"), preload("res://flight/laser_weapon.tres"),
+	preload("res://flight/missile_weapon.tres"), preload("res://flight/emp_weapon.tres"),
+]
 const MAX_TEST_ENEMIES := 16
 
 enum Opponent { DRILL, FIGHTER }
@@ -64,6 +69,8 @@ var angular_velocity: float:
 var acceleration := Vector2.ZERO
 var turn_input := 0.0
 var projectiles: Array[Projectile] = []
+var test_weapon := 0
+var _voyage_weapon: WeaponProfile
 var weapon_cooldown := 0.0
 var flash_remaining := 0.0
 var flash_direction := Vector2.RIGHT
@@ -92,6 +99,7 @@ var battle_result := ""
 
 func configure(ship_deck: DeckSimulation) -> void:
 	deck = ship_deck
+	_voyage_weapon = weapon
 	body.model = RESCUE_MODEL
 	body.power = deck.power
 	station_body.model = STATION_MODEL
@@ -101,6 +109,7 @@ func configure(ship_deck: DeckSimulation) -> void:
 
 
 func reset() -> void:
+	weapon = TEST_WEAPONS[test_weapon] if in_arena else _voyage_weapon
 	_clear_enemies()
 	if is_instance_valid(_cascade_enemy) and not _cascade_enemy.is_queued_for_deletion():
 		_cascade_enemy.queue_free()
@@ -345,15 +354,16 @@ func advance_flight(delta: float, steering: float, forward_thrust: bool, braking
 	var previous_angular := angular_velocity
 	var had_visuals := not body.active.is_empty()
 	var pilot := deck.pilot_efficiency()
-	var engine := deck.hull.condition(deck.engine_tile)
+	var engine_online := deck.module_online(deck.engine_tile)
+	var engine := deck.hull.condition(deck.engine_tile) if engine_online else 0.0
 	var drive := lerpf(0.38, 1.0, deck.engine_health) * engine * pilot
-	turn_input = steering * pilot
+	turn_input = steering * pilot if engine_online else 0.0
 	if turn_input * angular_velocity > 0.0 and absf(angular_velocity) >= MAX_SPIN * pilot:
 		turn_input = 0.0
 	var main := drive if forward_thrust and not braking else 0.0
 	var brake := engine * pilot if braking else 0.0
 	var supply := body.advance(delta, main, turn_input, brake,
-		pilot > 0.0 and (stabilized or braking and flight_computer), flight_computer)
+		engine_online and pilot > 0.0 and (stabilized or braking and flight_computer), flight_computer)
 	thrusting = main > 0.0 and supply > 0.0
 	if thrusting:
 		velocity = velocity.limit_length(maxf(MAX_SPEED * drive, previous_velocity.length()))
@@ -364,6 +374,14 @@ func advance_flight(delta: float, steering: float, forward_thrust: bool, braking
 	return (had_visuals or not body.active.is_empty() or previous_angular != 0.0
 		or not velocity.is_zero_approx() or previous_velocity != velocity
 		or previous_acceleration != acceleration)
+
+
+func select_test_weapon(index: int) -> void:
+	if not in_arena or index < 0 or index >= TEST_WEAPONS.size():
+		return
+	test_weapon = index
+	weapon = TEST_WEAPONS[index]
+	changed.emit()
 
 
 func weapon_status() -> String:
@@ -385,27 +403,18 @@ func fire() -> bool:
 		return false
 	if weapon_cooldown > 0.0 or deck.disabled() or not deck.weapons_are_manned() or not deck.power.can_spend(weapon.energy_cost):
 		return false
-	var instance := weapon.projectile.instantiate()
-	var projectile := instance as Projectile
-	if projectile == null:
-		instance.free()
-		push_error("Weapon projectile must inherit projectile.gd")
-		return false
-	deck.power.spend(weapon.energy_cost)
 	var gunner := deck.operator_at(deck.WorkPose.WEAPONS)
 	var spread := (1.0 - deck.hull.condition(deck.weapons_tile)) * weapon.damaged_spread_degrees
 	if gunner.role != "Наводчик":
 		spread += 5.0
 	var angle := heading + deg_to_rad(randf_range(-spread, spread))
-	var direction := Vector2.from_angle(angle)
-	flash_direction = direction
-	flash_remaining = FLASH_SECONDS
-	projectile.damage = weapon.damage
-	projectile.breach_chance = weapon.breach_chance
-	projectile.crew_damage = weapon.crew_damage
-	projectile.launch(muzzle_position(), direction)
-	add_child(projectile)
-	projectiles.append(projectile)
+	var mount := body.model.muzzle
+	mount.y = -weapon.muzzle_offset
+	if not _launch_shot(weapon, body, mount, angle, false):
+		return false
+	deck.power.spend(weapon.energy_cost)
+	flash_direction = Vector2.from_angle(angle)
+	flash_remaining = FLASH_SECONDS if weapon.kind in [WeaponProfile.Kind.KINETIC, WeaponProfile.Kind.MISSILE] else 0.0
 	weapon_cooldown = weapon.cooldown
 	changed.emit()
 	return true
@@ -421,48 +430,37 @@ func _advance_weapons(delta: float) -> bool:
 	var updated := not projectiles.is_empty() or weapon_cooldown > 0.0 or flash_remaining > 0.0
 	weapon_cooldown = move_toward(weapon_cooldown, 0.0, delta)
 	flash_remaining = move_toward(flash_remaining, 0.0, delta)
-	for index in range(projectiles.size() - 1, -1, -1):
-		var projectile := projectiles[index]
-		var before := projectile.position
-		projectile.advance(delta)
-		if projectile.remaining <= 0.0 or _projectile_hit(projectile, before):
-			projectiles.remove_at(index)
-			projectile.queue_free()
+	if not projectiles.is_empty():
+		var targets := _weapon_targets()
+		var station := null if in_arena else station_body
+		for index in range(projectiles.size() - 1, -1, -1):
+			var projectile := projectiles[index]
+			if not Weapons.tick(projectile, delta, targets, station):
+				projectiles.remove_at(index)
+				projectile.queue_free()
 	return updated
 
 
-func _projectile_hit(projectile: Projectile, before: Vector2) -> bool:
-	var nearest := INF
-	if not in_arena:
-		var station_hit: Variant = Physics.segment_hit(before, projectile.position, station_body.outline())
-		if station_hit != null:
-			nearest = before.distance_squared_to(station_hit)
+func _weapon_targets() -> Array[Weapons.Target]:
+	var targets: Array[Weapons.Target] = [Weapons.Target.new(body, deck, false)]
+	for hostile in enemies:
+		targets.append(Weapons.Target.new(hostile.body, hostile.deck, true))
+	return targets
 
-	var target_body: Physics.Body
-	var target_deck: DeckSimulation
-	var impact := Vector2.ZERO
-	if projectile.hostile:
-		var point: Variant = Physics.segment_hit(before, projectile.position, body.outline())
-		if point != null and before.distance_squared_to(point) < nearest:
-			target_body = body
-			target_deck = deck
-			impact = point
-	else:
-		for hostile in enemies:
-			if hostile.disabled():
-				continue
-			var point: Variant = Physics.segment_hit(before, projectile.position, hostile.body.outline())
-			if point != null and before.distance_squared_to(point) < nearest:
-				nearest = before.distance_squared_to(point)
-				target_body = hostile.body
-				target_deck = hostile.deck
-				impact = point
-	if target_deck == null:
-		return nearest < INF
-	var side := (impact - target_body.position).rotated(-target_body.heading - PI * 0.5)
-	if side.is_zero_approx():
-		side = -projectile.velocity.rotated(-target_body.heading - PI * 0.5)
-	target_deck.apply_hit(projectile.damage, projectile.breach_chance, projectile.crew_damage, side)
+
+func _launch_shot(profile: WeaponProfile, shooter: Physics.Body, mount: Vector2, angle: float, hostile: bool) -> bool:
+	var instance := profile.projectile.instantiate()
+	var shot := instance as Projectile
+	if shot == null:
+		instance.free()
+		push_error("Weapon projectile must inherit projectile.gd")
+		return false
+	var targets: Array[Weapons.Target] = []
+	if profile.kind == WeaponProfile.Kind.MISSILE:
+		targets = _weapon_targets()
+	Weapons.begin(shot, profile, shooter, mount, angle, hostile, targets)
+	add_child(shot)
+	projectiles.append(shot)
 	return true
 
 
@@ -505,20 +503,14 @@ func _fire_hostile(hostile: EnemyShip) -> void:
 	var profile := hostile.weapon
 	if profile == null or profile.projectile == null or profile.mounts.is_empty():
 		return
-	if not hostile.deck.power.spend(profile.energy_cost):
+	if not hostile.deck.power.can_spend(profile.energy_cost):
 		return
 	var spread := (1.0 - hostile.deck.hull.condition(hostile.deck.weapons_tile)) * profile.damaged_spread_degrees
 	for mount in profile.mounts:
-		var projectile := profile.projectile.instantiate() as Projectile
-		projectile.hostile = true
-		projectile.damage = profile.damage
-		projectile.breach_chance = profile.breach_chance
-		projectile.crew_damage = profile.crew_damage
-		var muzzle := hostile.model.world_point(mount, hostile.position, hostile.heading)
-		var direction := Vector2.from_angle(hostile.heading + deg_to_rad(randf_range(-spread, spread)))
-		projectile.launch(muzzle, direction)
-		add_child(projectile)
-		projectiles.append(projectile)
+		var angle := hostile.heading + deg_to_rad(randf_range(-spread, spread))
+		if not _launch_shot(profile, hostile.body, mount, angle, true):
+			return
+	hostile.deck.power.spend(profile.energy_cost)
 	hostile.weapons_cooldown = profile.cooldown
 	hostile.flash_remaining = FLASH_SECONDS
 

@@ -35,3 +35,11 @@ test('weapon stat blocks accept valid mounts and reject unsupported values',()=>
   assert.ok(!validWeapon({...sample,breach_chance:5}));
   assert.ok(!validWeapon({...sample,mounts:[[Infinity,0]]}));
 });
+
+test('the shipyard exports laser, missile and EMP parameters with the correct kind',()=>{
+  for (const type of ['laser','missile','emp']) assert.ok(validWeapon(weaponDefault(type)));
+  assert.ok(!validWeapon({...weaponDefault('laser'),laser_duration:0}));
+  assert.ok(!validWeapon({...weaponDefault('missile'),missile_blast_radius:-1}));
+  assert.ok(!validWeapon({...weaponDefault('emp'),emp_systems:1.5}));
+  assert.ok(!validWeapon({...weaponDefault('emp'),emp_edge_strength:1.5}));
+});

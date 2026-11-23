@@ -110,6 +110,7 @@ var _transits: Array[Transit] = []
 var hull := Hull.new()
 var damage_enabled := true
 var alerts: Dictionary[int, float] = {}
+var emp_timers: Dictionary[int, float] = {}
 var _rng := RandomNumberGenerator.new()
 
 
@@ -218,6 +219,7 @@ func reset(for_flight := false) -> void:
 		doors[edge] = Door.new(false)
 		doors[edge].automatic = edge not in hatches
 	alerts.clear()
+	emp_timers.clear()
 	power.energy = ShipPower.CAPACITY
 	hull.configure(plan, _door_edges, walls, hatches)
 	engine_health = 1.0 if for_flight else 0.0
@@ -259,7 +261,35 @@ func pilot_efficiency() -> float:
 
 
 func module_online(tile: Vector2i) -> bool:
-	return hull.condition(tile) > 0.0
+	return hull.condition(tile) > 0.0 and emp_time(tile) == 0.0
+
+
+func emp_time(tile: Vector2i) -> float:
+	return emp_timers.get(hull.room_at.get(tile, -1), 0.0)
+
+
+func apply_emp(drain: float, duration: float, count: int, side: Vector2) -> void:
+	if not damage_enabled or disabled():
+		return
+	power.spend(minf(power.energy, drain))
+	var modules := module_cells.duplicate()
+	var area := Vector2(_bounds.size)
+	var normal := side.normalized()
+	modules.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
+		return (Vector2(a) / area).dot(normal) > (Vector2(b) / area).dot(normal))
+	var affected := 0
+	for tile: Vector2i in modules:
+		var room: int = hull.room_at[tile]
+		if affected >= count:
+			break
+		if hull.condition(tile) <= 0.0 or duration <= 0.0:
+			continue
+		emp_timers[room] = maxf(emp_time(tile), duration)
+		affected += 1
+	if affected > 0:
+		notice = "ЭМИ. Отключено систем: %d." % affected
+		damage_alert.emit(modules.front(), false, notice)
+	changed.emit()
 
 
 func crew_alive() -> int:
@@ -275,7 +305,7 @@ func disabled() -> bool:
 
 
 func apply_hit(damage: float, breach_chance: float, crew_damage := 0.0,
-		impact_side := Vector2.ZERO, tile := INVALID_CELL) -> Vector2i:
+		impact_side := Vector2.ZERO, tile := INVALID_CELL, announce := true) -> Vector2i:
 	if not damage_enabled or hull.room_at.is_empty() or damage <= 0.0:
 		return INVALID_CELL
 	if tile == INVALID_CELL:
@@ -292,13 +322,18 @@ func apply_hit(damage: float, breach_chance: float, crew_damage := 0.0,
 		occupied.append_array(transit.cells)
 	var leaks_before := hull.breaches.size()
 	hull.strike(tile, damage, clampf(breach_chance, 0.0, 1.0), occupied, _rng)
+	var lost := false
 	if crew_damage > 0.0:
 		var room: int = hull.room_at[tile]
 		for member in crew:
 			if hull.room_at.get(Vector2i(member.position.round()), -1) == room:
-				_hurt_crew(member, crew_damage)
-		_replan_waiting_orders()
+				lost = _hurt_crew(member, crew_damage) or lost
+		if lost:
+			_replan_waiting_orders()
 	var breached := hull.breaches.size() > leaks_before
+	if not announce and not breached:
+		changed.emit()
+		return tile
 	var room_name: String = {"B": "мостик", "E": "двигатели", "W": "вооружение",
 		"L": "кислородная установка", "S": "шлюз", "C": "коридор", "R": "реактор"}[tile_kind(tile)]
 	notice = ("%s — %s" % ["Пробоина" if breached else "Повреждение", room_name.capitalize()])
@@ -693,7 +728,11 @@ func _advance_doors(delta: float) -> bool:
 
 func _physics_process(delta: float) -> void:
 	delta *= simulation_speed
-	var updated := not _transits.is_empty() or not alerts.is_empty()
+	var updated := not _transits.is_empty() or not alerts.is_empty() or not emp_timers.is_empty()
+	for room in emp_timers.keys():
+		emp_timers[room] -= delta
+		if emp_timers[room] <= 0.0:
+			emp_timers.erase(room)
 	for room in alerts.keys():
 		alerts[room] -= delta
 		if alerts[room] <= 0.0:
@@ -737,6 +776,8 @@ func _physics_process(delta: float) -> void:
 
 
 func energy_recovery_rate() -> float:
+	if not module_online(reactor_tile):
+		return 0.0
 	var rate := ShipPower.RECHARGE * hull.condition(reactor_tile)
 	return rate * ShipPower.OPERATOR_BONUS if operator_at(WorkPose.REACTOR) != null else rate
 
@@ -746,7 +787,7 @@ func _advance_atmosphere(delta: float) -> bool:
 	for tile in doors:
 		if doors[tile].openness >= 1.0:
 			open_doors.append(tile)
-	var support := hull.condition(life_support_tile)
+	var support := hull.condition(life_support_tile) if module_online(life_support_tile) else 0.0
 	if operator_at(WorkPose.LIFE_SUPPORT) != null:
 		support *= 1.5
 	var updated := hull.advance_air(delta, open_doors, support)

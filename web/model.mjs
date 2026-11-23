@@ -17,6 +17,50 @@ export const WEAPON_FIELDS = {
   damaged_spread_degrees: ['Разброс при повреждении, °', 0, 45, 0.5, 18],
   muzzle_offset: ['Вынос ствола', -256, 256, 0.1, 35],
 };
+export const WEAPON_TYPES = {
+  kinetic: 'Кинетическое орудие',
+  laser: 'Лазер',
+  missile: 'Самонаводящаяся ракета',
+  emp: 'Излучатель ЭМИ',
+};
+const SPECIAL_FIELDS = {
+  kinetic: {},
+  laser: {
+    laser_speed: ['Скорость развёртывания', 1, 20000, 1, 2800],
+    laser_duration: ['Длительность луча, с', 0.05, 20, 0.05, 1.4],
+    laser_range: ['Дальность луча', 1, 2000, 1, 460],
+  },
+  missile: {
+    missile_speed: ['Скорость ракеты', 1, 2500, 1, 145],
+    missile_fuse: ['Время до взрыва, с', 0.05, 20, 0.05, 4.2],
+    missile_turn_rate: ['Скорость поворота, °/с', 1, 1440, 1, 135],
+    missile_lock_angle: ['Полный угол захвата, °', 1, 360, 1, 112],
+    missile_blast_radius: ['Радиус взрыва', 1, 500, 1, 122],
+  },
+  emp: {
+    emp_range: ['Дальность ЭМИ', 1, 2000, 1, 385],
+    emp_angle: ['Полный угол конуса, °', 1, 360, 1, 76],
+    emp_speed: ['Скорость волны', 1, 5000, 1, 780],
+    emp_energy_drain: ['Потеря энергии вблизи', 0, 100, 0.1, 54],
+    emp_disable_duration: ['Длительность отключения, с', 0, 30, 0.1, 3.2],
+    emp_systems: ['Максимум отключённых систем', 0, 6, 1, 3],
+    emp_edge_strength: ['Доля эффекта на краю дальности', 0, 1, 0.01, 0.35],
+  },
+};
+const PRESET = {
+  laser: {damage:36,crew_damage:5,breach_chance:0.03,energy_cost:42,cooldown:2.2},
+  missile: {damage:59,crew_damage:16,breach_chance:0.4,energy_cost:26,cooldown:2},
+  emp: {damage:0,crew_damage:0,breach_chance:0,energy_cost:30,cooldown:2.6},
+};
+export function weaponFields(type) {
+  const fields = {...WEAPON_FIELDS,...SPECIAL_FIELDS[type]};
+  if (type === 'laser') {
+    for(const [key,label] of Object.entries({damage:'Урон отсеку в секунду',crew_damage:'Урон экипажу в секунду',breach_chance:'Шанс пробоины за секунду'}))
+      fields[key] = [label,...fields[key].slice(1)];
+  }
+  if (type === 'emp') for(const key of ['damage','crew_damage','breach_chance']) delete fields[key];
+  return fields;
+}
 const coords = (p) => Array.isArray(p) && p.length === 2 && p.every(n => Number.isInteger(n) && n >= -1 && n <= LIMITS.width);
 export const same = (a,b) => a?.[0] === b?.[0] && a?.[1] === b?.[1];
 const stepsFrom = ([x,y], directions = STEPS) => directions.map(([dx,dy]) => [x+dx,y+dy]);
@@ -104,15 +148,16 @@ export function prune(layout) {
   });
 }
 
-export function weaponDefault() {
-  return {type:'eve.weapon',version:1,name:'Кинетическое орудие',projectile:'kinetic',
-    ...Object.fromEntries(Object.entries(WEAPON_FIELDS).map(([k,v])=>[k,v[4]])),mounts:[]};
+export function weaponDefault(type='kinetic') {
+  return {type:'eve.weapon',version:1,name:WEAPON_TYPES[type],projectile:type,
+    ...Object.fromEntries(Object.entries(weaponFields(type)).map(([k,v])=>[k,v[4]])),...PRESET[type],mounts:[]};
 }
 
 export function validWeapon(data) {
   return tagged(data,'eve.weapon') && typeof data.name === 'string' && data.name.trim().length > 0 && data.name.length <= 40 &&
-    data.projectile === 'kinetic' && Object.entries(WEAPON_FIELDS).every(([key,[,min,max]]) =>
-      Number.isFinite(data[key]) && data[key] >= min && data[key] <= max) &&
+    Object.hasOwn(WEAPON_TYPES,data.projectile) && Object.entries(weaponFields(data.projectile)).every(([key,[,min,max]]) =>
+      Number.isFinite(data[key]) && data[key] >= min && data[key] <= max &&
+      (key !== 'emp_systems' || Number.isInteger(data[key]))) &&
     Array.isArray(data.mounts) && data.mounts.length <= 12 && data.mounts.every(p =>
       Array.isArray(p) && p.length === 2 && p.every(v=>Number.isFinite(v)&&Math.abs(v)<=256));
 }

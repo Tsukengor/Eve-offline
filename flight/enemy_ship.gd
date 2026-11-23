@@ -72,7 +72,7 @@ func _steer(_delta: float, _target_position: Vector2, _target_velocity: Vector2)
 func _fly_towards(delta: float, goal_velocity: Vector2) -> void:
 	var pilot := deck.pilot_efficiency()
 	var drive := deck.hull.condition(deck.engine_tile) * pilot
-	if pilot <= 0.0:
+	if pilot <= 0.0 or not deck.module_online(deck.engine_tile):
 		body.advance(delta, 0.0, 0.0, 0.0, false)
 		return
 	var goal := goal_velocity * lerpf(0.45, 1.0, drive)

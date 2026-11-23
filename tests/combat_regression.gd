@@ -25,6 +25,10 @@ func _test() -> void:
 	_check_enemy()
 	_check_drill_pursuit()
 	_check_fighter_and_test_controls()
+	_game._toggle_arena()
+	_check_laser()
+	_check_missile()
+	_check_emp()
 	if _failures == 0:
 		print("Combat regression checks passed.")
 	quit(_failures)
@@ -314,6 +318,94 @@ func _check_fighter_and_test_controls() -> void:
 	_game._toggle_arena()
 	_check(voyage.body.mass_scale == 1.0 and voyage.body.thrust_scale == 1.0 and voyage.deck.damage_enabled,
 		"Range settings do not affect the rescue campaign")
+
+
+func _weapon_fixture(kind: int) -> Voyage:
+	_game._reset()
+	var voyage := _game.voyage
+	voyage.set_test_damage(true, true)
+	voyage.select_test_weapon(kind)
+	voyage.heading = 0.0
+	return voyage
+
+
+func _check_laser() -> void:
+	var voyage := _weapon_fixture(1)
+	var target := voyage.add_test_enemy(Voyage.Opponent.DRILL)
+	target.position = voyage.ship_position + Vector2(210, 0)
+	target.heading = PI
+	var initial := target.deck.hull.integrity
+	_check(voyage.fire() and voyage.deck.power.energy == 58.0, "The laser consumes its high energy cost")
+	var beam := voyage.projectiles[0]
+	voyage._advance_weapons(TICK)
+	_check(beam.reach < 60.0 and target.deck.hull.integrity == initial, "The beam grows at its travel speed")
+	for frame in range(32):
+		voyage._advance_weapons(TICK)
+	_check(initial - target.deck.hull.integrity > 12.0 and initial - target.deck.hull.integrity < 22.0,
+		"A target in contact receives progressive laser damage")
+	initial = target.deck.hull.integrity
+	voyage.heading = PI * 0.5
+	voyage._advance_weapons(TICK)
+	_check(beam.position.is_equal_approx(voyage.muzzle_position()) and beam.end.y > beam.position.y
+		and target.deck.hull.integrity == initial, "The beam turns with its ship and damage stops when contact breaks")
+	for frame in range(90):
+		voyage._advance_weapons(TICK)
+	_check(voyage.projectiles.is_empty(), "The beam expires after its profile duration")
+
+
+func _check_missile() -> void:
+	var voyage := _weapon_fixture(2)
+	var target := voyage.add_test_enemy(Voyage.Opponent.DRILL)
+	var off_axis := voyage.add_test_enemy(Voyage.Opponent.FIGHTER)
+	target.position = voyage.ship_position + Vector2(195, 64)
+	target.heading = PI
+	off_axis.position = voyage.ship_position + Vector2(0, 94)
+	_check(voyage.fire(), "The launcher fires a missile")
+	var missile := voyage.projectiles[0]
+	_check(missile.target_body == target.body, "Missiles acquire the nearest eligible target inside the nose sector")
+	for frame in range(18):
+		voyage._advance_weapons(TICK)
+	_check(missile.velocity.y > 10.0 and missile.velocity.length() < 160.0, "Missiles curve toward their lock at low speed")
+	for frame in range(140):
+		voyage._advance_weapons(TICK)
+		if missile.blast_time > 0.0:
+			break
+	_check(missile.blast_time > 0.0 and target.deck.hull.integrity < 100.0
+		and off_axis.deck.hull.integrity == Hull.HULL_MAX, "A collision detonates the missile before its fuse expires")
+
+	voyage = _weapon_fixture(2)
+	_check(voyage.fire(), "A missile can launch without a target")
+	var timed := voyage.projectiles[0]
+	timed.remaining = TICK
+	voyage._advance_weapons(TICK)
+	_check(timed.blast_time > 0.0 and voyage.deck.hull.integrity < Hull.HULL_MAX,
+		"The fuse can detonate an unguided missile and its blast can damage the firing ship")
+
+
+func _check_emp() -> void:
+	var voyage := _weapon_fixture(3)
+	var near_ship := voyage.add_test_enemy(Voyage.Opponent.DRILL)
+	var far_ship := voyage.add_test_enemy(Voyage.Opponent.DRILL)
+	var outside := voyage.add_test_enemy(Voyage.Opponent.FIGHTER)
+	near_ship.position = voyage.ship_position + Vector2(105, 0)
+	far_ship.position = voyage.ship_position + Vector2(305, 0)
+	outside.position = voyage.ship_position + Vector2(0, 150)
+	near_ship.heading = PI
+	far_ship.heading = PI
+	_check(voyage.fire(), "The EMP emits a traveling cone")
+	for frame in range(35):
+		voyage._advance_weapons(TICK)
+	_check(near_ship.deck.power.energy < far_ship.deck.power.energy and far_ship.deck.power.energy < 100.0
+		and outside.deck.power.energy == 100.0, "The EMP weakens with distance and misses ships outside the cone")
+	_check(near_ship.deck.emp_timers.size() == 3 and near_ship.deck.hull.integrity == Hull.HULL_MAX
+		and not near_ship.deck.module_online(near_ship.deck.weapons_tile),
+		"EMP disables multiple systems toward the near side without damaging their hull")
+	for frame in range(210):
+		near_ship.deck._physics_process(TICK)
+	_check(near_ship.deck.emp_timers.is_empty() and near_ship.deck.module_online(near_ship.deck.weapons_tile),
+		"Disabled systems automatically return when the EMP timer ends")
+	_game._toggle_arena()
+	_check(voyage.weapon.kind == 0, "The rescue scenario retains its kinetic weapon")
 
 
 func _check(value: bool, message: String) -> void:

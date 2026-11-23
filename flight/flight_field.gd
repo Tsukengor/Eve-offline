@@ -9,6 +9,11 @@ const DISTRESS_STATION := preload("res://assets/flight/station_distress.png")
 const EXHAUST := preload("res://assets/flight/thruster.png")
 const MANEUVER_EXHAUST := preload("res://assets/flight/maneuver_thruster.png")
 const MUZZLE_FLASH := preload("res://assets/flight/muzzle_flash.png")
+const LASER_BEAM := preload("res://assets/flight/laser_beam.png")
+const MISSILE := preload("res://assets/flight/guided_missile.png")
+const EXPLOSION := preload("res://assets/flight/missile_blast.png")
+const EMP_SPARK := preload("res://assets/flight/emp_spark.png")
+const Profile = preload("res://flight/weapon_profile.gd")
 const REACTOR := preload("res://assets/deck/reactor.png")
 const ROOM_DAMAGE := preload("res://assets/deck/room_damage.png")
 const STARFIELD := preload("res://assets/flight/starfield.png")
@@ -125,14 +130,59 @@ func _draw_projectiles(size: Vector2) -> void:
 	var visible_area := Rect2(Vector2.ZERO, size).grow(24)
 	for projectile in voyage.projectiles:
 		var point := world_to_screen(projectile.position)
-		if visible_area.has_point(point):
-			draw_set_transform(point, projectile.velocity.angle() + PI * 0.5)
-			_sprite(projectile.sprite, Vector2.ZERO, projectile.sprite_size, Color("#ff995e") if projectile.hostile else Color.WHITE)
+		match projectile.profile.kind:
+			Profile.Kind.LASER:
+				var finish := world_to_screen(projectile.end)
+				var length := point.distance_to(finish)
+				if length > 0.1:
+					draw_line(point, finish, Color(0.82, 0.54, 1.0, 0.68), 1.5, true)
+					draw_set_transform(point, projectile.angle + PI * 0.5)
+					draw_texture_rect(LASER_BEAM, Rect2(-6.0, -length, 12.0, length), false)
+					draw_set_transform(Vector2.ZERO)
+					if projectile.contact_body != null:
+						_sprite(LASER_BEAM, finish, 17.0, Color("#dfb6ff"))
+			Profile.Kind.EMP:
+				_draw_emp_wave(projectile, point)
+			Profile.Kind.MISSILE:
+				if projectile.blast_time > 0.0:
+					var fraction: float = projectile.blast_time / Voyage.Weapons.BLAST_SECONDS
+					var diameter := projectile.profile.missile_blast_radius * 2.0
+					_sprite(EXPLOSION, point, diameter * lerpf(0.25, 0.92, 1.0 - fraction), Color(1, 1, 1, sqrt(fraction)))
+					draw_arc(point, diameter * 0.5 * lerpf(0.35, 1.0, 1.0 - fraction), 0, TAU, 48, Color(1, 0.62, 0.30, fraction * 0.7), 2.0, true)
+				elif visible_area.has_point(point):
+					_draw_shell(MISSILE, point, projectile.angle, 26.0)
+			_:
+				if visible_area.has_point(point):
+					_draw_shell(projectile.sprite, point, projectile.velocity.angle(), projectile.sprite_size,
+						Color("#ff995e") if projectile.hostile else Color.WHITE)
 	if voyage.flash_remaining > 0.0:
 		var flash_position := world_to_screen(voyage.muzzle_position())
 		draw_set_transform(flash_position, voyage.flash_direction.angle() + PI * 0.5)
 		_sprite(MUZZLE_FLASH, Vector2.ZERO, 29.0, Color(1, 1, 1, voyage.flash_remaining / Voyage.FLASH_SECONDS))
 	draw_set_transform(Vector2.ZERO)
+
+
+func _draw_shell(sprite: Texture2D, point: Vector2, angle: float, extent: float, tint := Color.WHITE) -> void:
+	draw_set_transform(point, angle + PI * 0.5)
+	_sprite(sprite, Vector2.ZERO, extent, tint)
+	draw_set_transform(Vector2.ZERO)
+
+
+func _draw_emp_wave(projectile: Voyage.Projectile, point: Vector2) -> void:
+	if projectile.reach <= 0.0:
+		return
+	var half := deg_to_rad(projectile.profile.emp_angle * 0.5)
+	var first := projectile.angle - half
+	var last := projectile.angle + half
+	var fade := 1.0 - 0.7 * projectile.reach / projectile.profile.emp_range
+	var outline := Color(0.42, 0.91, 1.0, fade)
+	draw_arc(point, projectile.reach, first, last, 32, outline, 3.0, true)
+	draw_arc(point, projectile.reach * 0.86, first, last, 26, Color(outline, fade * 0.38), 1.0, true)
+	draw_line(point, point + Vector2.from_angle(first) * projectile.reach, Color(outline, fade * 0.32), 1.0, true)
+	draw_line(point, point + Vector2.from_angle(last) * projectile.reach, Color(outline, fade * 0.32), 1.0, true)
+	for factor in [-0.82, -0.41, 0.0, 0.41, 0.82]:
+		var spark := point + Vector2.from_angle(projectile.angle + half * factor) * projectile.reach
+		_sprite(EMP_SPARK, spark, 17.0, Color(1, 1, 1, fade))
 
 
 func _draw_ship() -> void:
@@ -190,7 +240,9 @@ func _draw_scan(size: Vector2) -> void:
 		draw_line(center - tangent, center + tangent, Color("#547883") if door.openness > 0.95 else Color("#cd9c6b"), 2.0)
 	for tile: Vector2i in deck.module_cells:
 		var at := origin + (Vector2(tile) + Vector2.ONE * 0.45) * cell_size
-		if deck.hull.condition(tile) < 1.0:
+		if deck.emp_time(tile) > 0.0:
+			_sprite(EMP_SPARK, at, 9.0)
+		elif deck.hull.condition(tile) < 1.0:
 			_sprite(ROOM_DAMAGE, at, 9.0)
 		elif tile == deck.reactor_tile:
 			_sprite(REACTOR, at, 7.0)

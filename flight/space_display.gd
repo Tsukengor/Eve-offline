@@ -147,7 +147,7 @@ func _draw_ship_metrics(baseline: float) -> void:
 	var engine := minf(voyage.deck.engine_health, voyage.deck.hull.condition(voyage.deck.ENGINE))
 	var airlock := voyage.deck.airlock_progress
 	_metric("Топливо", "%d / %d" % [voyage.fuel, Voyage.FULL_FUEL], baseline, TEXT)
-	_metric("Двигатель", "%d%%" % floori(engine * 100), baseline + 31,
+	_metric("Двигатель", "ЭМИ" if voyage.deck.emp_time(voyage.deck.engine_tile) > 0.0 else "%d%%" % floori(engine * 100), baseline + 31,
 		ACCENT if engine >= 1.0 else DANGER)
 	_metric("Шлюз", "Готов" if airlock >= 1.0 else "%d%%" % floori(airlock * 100),
 		baseline + 62, ACCENT if airlock >= 1.0 else MUTED)

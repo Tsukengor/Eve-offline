@@ -22,6 +22,7 @@ var _computer_button: Button
 var _scan_button: Button
 var _scan_next: Button
 var _test_panel: Control
+var _weapon_select: OptionButton
 var _test_mass_value: Label
 var _test_thrust_value: Label
 var _spawn_drill: Button
@@ -43,6 +44,14 @@ func _ready() -> void:
 	_computer_button = _button("Борткомпьютер", Vector2(32, 651), Vector2(200, 34), _toggle_computer)
 	_scan_button = _button("Сканер", Vector2(244, 651), Vector2(165, 34), _toggle_scan)
 	_scan_next = _button("Другая цель", Vector2(422, 651), Vector2(135, 34), _cycle_scan)
+	_weapon_select = OptionButton.new()
+	_weapon_select.position = Vector2(800, 651)
+	_weapon_select.size = Vector2(288, 34)
+	_weapon_select.focus_mode = Control.FOCUS_NONE
+	for profile in Voyage.TEST_WEAPONS:
+		_weapon_select.add_item(profile.title)
+	_weapon_select.item_selected.connect(voyage.select_test_weapon)
+	add_child(_weapon_select)
 	_build_test_panel()
 	_alert = _label("", Vector2(54, 173), 17, self)
 	_alert.add_theme_color_override("font_color", Color("#ffab8c"))
@@ -108,6 +117,8 @@ func _refresh() -> void:
 	_scan_button.text = "Скрыть сканер" if voyage.scan_enemy else "Сканер"
 	_scan_next.visible = _scan_button.visible and voyage.scan_enemy and voyage.enemies.size() > 1
 	_test_panel.visible = mode == Mode.FLIGHT and voyage.in_arena
+	_weapon_select.visible = _test_panel.visible
+	_weapon_select.select(voyage.test_weapon)
 	_spawn_drill.disabled = voyage.enemies.size() >= Voyage.MAX_TEST_ENEMIES
 	_spawn_fighter.disabled = _spawn_drill.disabled
 	_clear_targets.disabled = voyage.enemies.is_empty() and voyage.projectiles.is_empty()

@@ -1,4 +1,4 @@
-import {LIMITS,ROOMS,MODULES,STEPS,WEAPON_FIELDS,floor,at,fresh,same,edgeKey,inspectLayout,prune,weaponDefault,validWeapon} from './model.mjs';
+import {LIMITS,ROOMS,MODULES,STEPS,WEAPON_TYPES,weaponFields,floor,at,fresh,same,edgeKey,inspectLayout,prune,weaponDefault,validWeapon} from './model.mjs';
 
 const $ = (id) => document.getElementById(id);
 const element = (tag,text) => {
@@ -310,33 +310,40 @@ function mountRow(point=[0,0]) {
 }
 function fillWeapon() {
   $('weapon-name').value=weapon.name;
-  for(const key of Object.keys(WEAPON_FIELDS))weaponForm.elements[key].value=weapon[key];
+  $('weapon-type').value=weapon.projectile;
+  $('weapon-fields').replaceChildren(...Object.entries(weaponFields(weapon.projectile)).map(([key,[label,min,max]])=>{
+    const field=element('label',label);field.className='control-label';
+    const input=element('input');input.name=key;input.type='number';input.min=min;input.max=max;
+    input.step=key==='emp_systems'?'1':'any';input.required=true;input.value=weapon[key];
+    field.append(input);return field;
+  }));
   $('mounts-list').replaceChildren();weapon.mounts.forEach(mountRow);readWeapon();
 }
 function readWeapon() {
   const mounts=[...$('mounts-list').children].map(row=>[...row.querySelectorAll('input')].map(input=>input.valueAsNumber));
   const draft={...weapon,name:$('weapon-name').value,projectile:weaponForm.elements.projectile.value,mounts};
-  for(const key of Object.keys(WEAPON_FIELDS))draft[key]=weaponForm.elements[key].valueAsNumber;
+  const fields=weaponFields(draft.projectile);
+  for(const key of Object.keys(fields))draft[key]=weaponForm.elements[key].valueAsNumber;
   $('weapon-title').textContent=draft.name||'Без названия';
-  $('weapon-stats').replaceChildren(...Object.entries(WEAPON_FIELDS).map(([key,[label]])=>{
+  $('weapon-stats').replaceChildren(...Object.entries(fields).map(([key,[label]])=>{
     const row=element('div'),value=draft[key];
-    row.append(element('dt',label),element('dd',Number.isFinite(value)?(key==='breach_chance'?Math.round(value*100)+' %':String(value)):'—'));
+    row.append(element('dt',label),element('dd',Number.isFinite(value)?(['breach_chance','emp_edge_strength'].includes(key)?Math.round(value*100)+' %':String(value)):'—'));
     return row;
   }));
   $('add-mount').disabled=mounts.length>=12;
   if(validWeapon(draft)){weapon=draft;saveDraft();}
   return draft;
 }
-for(const [key,[label,min,max,step]] of Object.entries(WEAPON_FIELDS)){
-  const field=element('label',label);field.className='control-label';
-  const input=element('input');input.name=key;input.type='number';input.min=min;input.max=max;input.step=step;input.required=true;
-  field.append(input);$('weapon-fields').append(field);
-}
-weaponForm.oninput=readWeapon;
+$('weapon-type').replaceChildren(...Object.entries(WEAPON_TYPES).map(([key,label])=>{
+  const option=element('option',label);option.value=key;return option;
+}));
+$('weapon-type').onchange=event=>{weapon=weaponDefault(event.target.value);fillWeapon();};
+weaponForm.oninput=event=>{if(event.target.name!=='projectile')readWeapon();};
 weaponForm.onsubmit=event=>{
   event.preventDefault();
   const data=readWeapon();
   if(validWeapon(data))download(data);
+  else message("Проверьте название и параметры орудия.",true);
 };
 $('add-mount').onclick=()=>{if($('mounts-list').children.length<12){mountRow();readWeapon();}};
 $('open-weapon').onclick=()=>$('weapon-file').click();

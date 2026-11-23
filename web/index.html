@@ -53,12 +53,12 @@
     <input id="layout-file" type="file" hidden accept=".json,application/json">
   </section>
   <section id="weapon-editor" hidden>
-    <div class="heading"><div><h1>Статблок оружия</h1><p>Параметры кинетического орудия</p></div>
+    <div class="heading"><div><h1>Статблок оружия</h1></div>
     <div class="actions"><button id="open-weapon">Открыть JSON</button><button form="weapon-form" class="primary">Скачать JSON</button></div></div>
     <div class="weapon-layout">
       <form id="weapon-form" class="weapon-form">
         <label class="control-label">Название<input id="weapon-name" name="weapon-name" maxlength="40" required></label>
-        <label class="control-label">Тип снаряда<select name="projectile"><option value="kinetic">Кинетический</option></select></label>
+        <label class="control-label">Тип орудия<select name="projectile" id="weapon-type"></select></label>
         <div class="weapon-grid" id="weapon-fields"></div>
         <div class="mounts"><h2>Точки вылета</h2><p>Координаты относительно спрайта. Если список пуст, применяется вылет у носа.</p><div id="mounts-list"></div><button type="button" id="add-mount">Добавить точку</button></div>
       </form>

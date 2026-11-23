@@ -1,0 +1,15 @@
+[gd_resource type="Resource" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://flight/weapon_profile.gd" id="1"]
+[ext_resource type="PackedScene" path="res://flight/kinetic_projectile.tscn" id="2"]
+
+[resource]
+script = ExtResource("1")
+projectile = ExtResource("2")
+kind = 3
+title = "ЭМИ"
+cooldown = 2.6
+damage = 0.0
+crew_damage = 0.0
+breach_chance = 0.0
+energy_cost = 30.0

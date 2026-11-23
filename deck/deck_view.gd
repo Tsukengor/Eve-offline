@@ -57,6 +57,7 @@ const WEAPONS_SPRITE := preload("res://assets/deck/weapons_console.png")
 const LIFE_SUPPORT_SPRITE := preload("res://assets/deck/life_support.png")
 const BREACH_SPRITE := preload("res://assets/deck/breach.png")
 const AIR_LEAK := preload("res://assets/deck/air_leak.png")
+const EMP_SPARK := preload("res://assets/flight/emp_spark.png")
 const DAMAGE_SPRITE := preload("res://assets/deck/room_damage.png")
 const DAMAGE_TONE := preload("res://assets/audio/system_damage.wav")
 const BREACH_TONE := preload("res://assets/audio/hull_breach.wav")
@@ -268,7 +269,7 @@ func _draw() -> void:
 	_text("Экипаж", Vector2(792, 164), 21)
 	_draw_deck()
 
-	_draw_meter("Двигатель", minf(simulation.engine_health, simulation.hull.condition(simulation.engine_tile)), 458, AMBER)
+	_draw_meter("Двигатель · ЭМИ" if simulation.emp_time(simulation.engine_tile) > 0.0 else "Двигатель", minf(simulation.engine_health, simulation.hull.condition(simulation.engine_tile)), 458, AMBER)
 	_draw_meter("Спасательный шлюз", simulation.airlock_progress, 499, ACCENT)
 	var member := simulation.crew[_selected]
 	var readout := _hovered_cell if _hovered_cell != DeckSimulation.INVALID_CELL else Vector2i(member.position.round())
@@ -309,6 +310,8 @@ func _draw_floor() -> void:
 			if flash > 0.0:
 				var pulse := (0.16 + 0.23 * sin(flash * TAU * 2.0) ** 2) * minf(flash, 1.0)
 				draw_rect(bounds, Color(1.0, 0.28, 0.14, pulse))
+			if simulation.emp_time(tile) > 0.0:
+				draw_rect(bounds, Color(0.18, 0.50, 0.72, 0.32))
 			if air < 0.999:
 				draw_rect(bounds, Color(0.25, 0.62, 0.91, (1.0 - air) * 0.57))
 	# Thresholds span two tiles, so the entire floor must be drawn first.
@@ -448,6 +451,8 @@ func _draw_module(tile: Vector2i, sprite: Texture2D, tint: Color) -> void:
 	draw_rect(box, rim.darkened(0.78))
 	_draw_sprite(sprite, center, 28.0, Color.WHITE.darkened((1.0 - condition) * 0.45))
 	draw_rect(box, rim, false, 1)
+	if simulation.emp_time(tile) > 0.0:
+		_draw_sprite(EMP_SPARK, center, 25.0, Color(1, 1, 1, 0.78))
 	if condition < 0.9:
 		_draw_sprite(DAMAGE_SPRITE, center + Vector2(12, -12) * scale, 12.0)
 		draw_line(box.end - Vector2(28, 2) * scale, box.end - Vector2(28 - 26 * condition, 2) * scale, rim, 2.0)
