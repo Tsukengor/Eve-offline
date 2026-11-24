@@ -1,6 +1,7 @@
 extends Node
 
 signal changed
+signal weapon_fired(kind: int)
 
 const DeckSimulation = preload("res://deck/deck_simulation.gd")
 const WeaponProfile = preload("res://flight/weapon_profile.gd")
@@ -73,6 +74,8 @@ var turn_input := 0.0
 var projectiles: Array[Projectile] = []
 var test_weapon := 0
 var _voyage_weapon: WeaponProfile
+var laser_beam: Projectile
+var _laser_spent := false
 var weapon_cooldown := 0.0
 var flash_remaining := 0.0
 var flash_direction := Vector2.RIGHT
@@ -87,6 +90,10 @@ var scan_enemy := false
 var incident_seen := false
 var notice := ""
 var in_arena := false
+var in_training := false
+var training_can_dock := false
+var training_hint := ""
+var training_step := 1
 var enemies: Array[EnemyShip] = []
 var enemy: EnemyShip:
 	get:
@@ -148,9 +155,27 @@ func add_test_enemy(kind: Opponent) -> EnemyShip:
 	return hostile
 
 
+func spawn_training_target() -> EnemyShip:
+	var target := _spawn_enemy(ship_position + Vector2.from_angle(heading) * 190.0, Opponent.FIGHTER)
+	target.call_sign = "Учебная цель"
+	enemies.append(target)
+	return target
+
+
+func finish_training_target(target: EnemyShip) -> void:
+	if is_instance_valid(target):
+		enemies.erase(target)
+		if not target.is_queued_for_deletion():
+			target.queue_free()
+	for shot in projectiles:
+		shot.queue_free()
+	projectiles.clear()
+
+
 func clear_test_enemies() -> void:
 	if not in_arena:
 		return
+	stop_laser()
 	_clear_enemies()
 	for index in range(projectiles.size() - 1, -1, -1):
 		projectiles[index].queue_free()
@@ -196,6 +221,8 @@ func _spawn_enemy(at: Vector2, kind: Opponent = Opponent.DRILL) -> EnemyShip:
 
 
 func _spawn_ship() -> void:
+	stop_laser()
+	_laser_spent = false
 	for projectile in projectiles:
 		projectile.queue_free()
 	projectiles.clear()
@@ -232,6 +259,8 @@ func route_cost(destination: int) -> int:
 
 
 func jump_blocker(destination: int) -> String:
+	if in_training:
+		return "Учебный рейс проходит в одной системе."
 	if in_arena:
 		return "Полигон находится вне звёздной карты."
 	if stage == Stage.COMPLETE or not battle_result.is_empty():
@@ -274,6 +303,8 @@ func jump(destination: int) -> bool:
 
 
 func dock_blocker() -> String:
+	if in_training and not training_can_dock:
+		return "Сначала выполни учебные задачи."
 	if in_arena:
 		return "На полигоне нет станции."
 	if stage == Stage.COMPLETE or not battle_result.is_empty():
@@ -303,6 +334,7 @@ func toggle_docking() -> bool:
 
 
 func _dock() -> void:
+	stop_laser()
 	docked = true
 	body.fixed = true
 	body.active.clear()
@@ -315,6 +347,10 @@ func _dock() -> void:
 	ship_position = station_position() + approach * (CONTACT_RADIUS + 4.0)
 	velocity = Vector2.ZERO
 	heading = ship_position.angle_to_point(station_position())
+	if in_training:
+		delivered = RESCUE_COUNT
+		stage = Stage.COMPLETE
+		return
 	if current_system == DISTRESS:
 		if stage == Stage.ANSWER_DISTRESS:
 			survivors_onboard = RESCUE_COUNT
@@ -335,6 +371,11 @@ func _dock() -> void:
 
 func _physics_process(delta: float) -> void:
 	delta *= simulation_speed
+	var firing := (manual_control and not docked and stage != Stage.COMPLETE
+		and battle_result.is_empty() and Input.is_action_pressed("flight_fire"))
+	if not firing:
+		stop_laser()
+		_laser_spent = false
 	var steering := 0.0
 	var forward_thrust := false
 	var braking := false
@@ -346,8 +387,11 @@ func _physics_process(delta: float) -> void:
 	var stabilized := manual_control and Input.is_action_pressed("flight_stabilize")
 	var changed_flight := advance_flight(delta, steering, forward_thrust, braking, stabilized)
 	var changed_battle := _advance_battle(delta)
+	var channeling := weapon != null and weapon.kind == WeaponProfile.Kind.LASER
+	if firing and channeling:
+		fire()
 	var changed_weapons := _advance_weapons(delta)
-	if manual_control and Input.is_action_pressed("flight_fire") and fire():
+	if firing and not channeling and fire():
 		return # Firing already notified the view.
 	if changed_flight or changed_weapons or changed_battle:
 		changed.emit()
@@ -387,6 +431,7 @@ func advance_flight(delta: float, steering: float, forward_thrust: bool, braking
 func select_test_weapon(index: int) -> void:
 	if not in_arena or index < 0 or index >= TEST_WEAPONS.size():
 		return
+	stop_laser()
 	test_weapon = index
 	weapon = TEST_WEAPONS[index]
 	changed.emit()
@@ -401,6 +446,8 @@ func weapon_status() -> String:
 		return "Пост свободен"
 	if docked or stage == Stage.COMPLETE or not battle_result.is_empty():
 		return "Заблокировано"
+	if weapon.kind == WeaponProfile.Kind.LASER:
+		return "Луч активен" if is_instance_valid(laser_beam) else ("Зарядка" if _laser_spent or deck.power.energy <= 0.0 else "Готово")
 	if weapon_cooldown > 0.0:
 		return "Перезарядка"
 	return "Готово" if deck.power.can_spend(weapon.energy_cost) else "Зарядка"
@@ -409,7 +456,13 @@ func weapon_status() -> String:
 func fire() -> bool:
 	if weapon == null or weapon.projectile == null or docked or stage == Stage.COMPLETE or not battle_result.is_empty():
 		return false
-	if weapon_cooldown > 0.0 or deck.disabled() or not deck.weapons_are_manned() or not deck.power.can_spend(weapon.energy_cost):
+	if deck.disabled() or not deck.weapons_are_manned():
+		return false
+	var is_laser := weapon.kind == WeaponProfile.Kind.LASER
+	if is_laser:
+		if is_instance_valid(laser_beam) or _laser_spent or deck.power.energy <= 0.0:
+			return false
+	elif weapon_cooldown > 0.0 or not deck.power.can_spend(weapon.energy_cost):
 		return false
 	var gunner := deck.operator_at(deck.WorkPose.WEAPONS)
 	var spread := (1.0 - deck.hull.condition(deck.weapons_tile)) * weapon.damaged_spread_degrees
@@ -420,12 +473,26 @@ func fire() -> bool:
 	mount.y = -weapon.muzzle_offset
 	if not _launch_shot(weapon, body, mount, angle, false):
 		return false
-	deck.power.spend(weapon.energy_cost)
+	if is_laser:
+		laser_beam = projectiles.back()
+	else:
+		deck.power.spend(weapon.energy_cost)
+		weapon_fired.emit(weapon.kind)
 	flash_direction = Vector2.from_angle(angle)
 	flash_remaining = FLASH_SECONDS if weapon.kind in [WeaponProfile.Kind.KINETIC, WeaponProfile.Kind.MISSILE, WeaponProfile.Kind.RAIL] else 0.0
-	weapon_cooldown = weapon.cooldown
+	if not is_laser:
+		weapon_cooldown = weapon.cooldown
 	changed.emit()
 	return true
+
+
+func stop_laser() -> void:
+	if not is_instance_valid(laser_beam):
+		return
+	projectiles.erase(laser_beam)
+	laser_beam.queue_free()
+	laser_beam = null
+	changed.emit()
 
 
 func muzzle_position() -> Vector2:
@@ -446,6 +513,9 @@ func _advance_weapons(delta: float) -> bool:
 		for index in range(projectiles.size() - 1, -1, -1):
 			var projectile := projectiles[index]
 			if not Weapons.tick(projectile, delta, targets, station, projectiles):
+				if projectile == laser_beam:
+					_laser_spent = deck.power.energy <= 0.0
+					laser_beam = null
 				projectiles.remove_at(index)
 				projectile.queue_free()
 	return updated
@@ -470,6 +540,7 @@ func _try_flak() -> void:
 		if _launch_shot(FLAK, body, mount, heading, false):
 			deck.power.spend(FLAK.energy_cost)
 			flak_cooldown = FLAK.cooldown
+			weapon_fired.emit(WeaponProfile.Kind.FLAK)
 		return
 
 
@@ -516,7 +587,7 @@ func _advance_battle(delta: float) -> bool:
 			if hostile != _cascade_enemy:
 				hostile.queue_free()
 			enemies.remove_at(index)
-		else:
+		elif not in_training:
 			hostile.advance(delta, ship_position, velocity)
 			if hostile.shot_requested:
 				_fire_hostile(hostile)
@@ -550,6 +621,7 @@ func _fire_hostile(hostile: EnemyShip) -> void:
 	hostile.deck.power.spend(profile.energy_cost)
 	hostile.weapons_cooldown = profile.cooldown
 	hostile.flash_remaining = FLASH_SECONDS
+	weapon_fired.emit(profile.kind)
 
 
 func _resolve_enemy_contact(hostile: EnemyShip, delta: float) -> void:

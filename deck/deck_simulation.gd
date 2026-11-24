@@ -103,6 +103,7 @@ var doors: Dictionary[Vector4i, Door] = {}
 var engine_health := 0.0
 var airlock_progress := 0.0
 var notice := ""
+var training_hint := ""
 var _door_edges: Array = []
 var _grid := AStar2D.new()
 var _bounds := Rect2i()
@@ -112,6 +113,8 @@ var floor_bounds := Rect2()
 var damage_enabled := true
 var alerts: Dictionary[int, float] = {}
 var emp_timers: Dictionary[int, float] = {}
+var emp_recovery_time := 0.0
+var _emp_recovery_loss := 0.0
 var _rng := RandomNumberGenerator.new()
 
 
@@ -221,6 +224,8 @@ func reset(for_flight := false) -> void:
 		doors[edge].automatic = edge not in hatches
 	alerts.clear()
 	emp_timers.clear()
+	emp_recovery_time = 0.0
+	_emp_recovery_loss = 0.0
 	power.energy = ShipPower.CAPACITY
 	hull.configure(plan, _door_edges, walls, hatches)
 	var first: Vector2i = hull.room_at.keys()[0]
@@ -273,10 +278,13 @@ func emp_time(tile: Vector2i) -> float:
 	return emp_timers.get(hull.room_at.get(tile, -1), 0.0)
 
 
-func apply_emp(drain: float, duration: float, count: int, side: Vector2) -> void:
+func apply_emp(drain: float, duration: float, count: int, side: Vector2, recovery_loss := 0.0) -> void:
 	if not damage_enabled or disabled():
 		return
 	power.spend(minf(power.energy, drain))
+	if recovery_loss > 0.0:
+		emp_recovery_time = 10.0
+		_emp_recovery_loss = maxf(_emp_recovery_loss, recovery_loss)
 	var modules := module_cells.duplicate()
 	var area := Vector2(_bounds.size)
 	var normal := side.normalized()
@@ -733,7 +741,7 @@ func _advance_doors(delta: float) -> bool:
 
 func _physics_process(delta: float) -> void:
 	delta *= simulation_speed
-	var updated := not _transits.is_empty() or not alerts.is_empty() or not emp_timers.is_empty()
+	var updated := not _transits.is_empty() or not alerts.is_empty() or not emp_timers.is_empty() or emp_recovery_time > 0.0
 	for room in emp_timers.keys():
 		emp_timers[room] -= delta
 		if emp_timers[room] <= 0.0:
@@ -742,7 +750,13 @@ func _physics_process(delta: float) -> void:
 		alerts[room] -= delta
 		if alerts[room] <= 0.0:
 			alerts.erase(room)
-	updated = power.recharge(delta, energy_recovery_rate()) or updated
+	var suppressed := minf(emp_recovery_time, delta)
+	if suppressed > 0.0:
+		updated = power.recharge(suppressed, energy_recovery_rate()) or updated
+		emp_recovery_time = move_toward(emp_recovery_time, 0.0, suppressed)
+		if emp_recovery_time == 0.0:
+			_emp_recovery_loss = 0.0
+	updated = power.recharge(delta - suppressed, energy_recovery_rate()) or updated
 	updated = _advance_atmosphere(delta) or updated
 	if _advance_transits(delta):
 		_replan_waiting_orders()
@@ -783,7 +797,7 @@ func _physics_process(delta: float) -> void:
 func energy_recovery_rate() -> float:
 	if not module_online(reactor_tile):
 		return 0.0
-	var rate := ShipPower.RECHARGE * hull.condition(reactor_tile)
+	var rate := ShipPower.RECHARGE * hull.condition(reactor_tile) * (1.0 - _emp_recovery_loss)
 	return rate * ShipPower.OPERATOR_BONUS if operator_at(WorkPose.REACTOR) != null else rate
 
 

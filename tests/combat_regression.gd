@@ -29,6 +29,7 @@ func _test() -> void:
 	_check_laser()
 	_check_missile()
 	_check_emp()
+	_check_missile_fighter_tactics()
 	_check_railgun()
 	_check_flak()
 	_check_pusher()
@@ -340,7 +341,7 @@ func _check_laser() -> void:
 	target.position = voyage.ship_position + Vector2(1700, 0)
 	target.heading = PI
 	var initial := target.deck.hull.integrity
-	_check(voyage.fire() and voyage.deck.power.energy == 58.0, "The laser consumes its high energy cost")
+	_check(voyage.fire() and voyage.deck.power.energy == 100.0, "Activating the laser does not charge a lump sum")
 	var beam := voyage.projectiles[0]
 	for frame in range(4):
 		voyage._advance_weapons(TICK)
@@ -349,15 +350,30 @@ func _check_laser() -> void:
 	_check(is_equal_approx(initial - target.deck.hull.integrity, 3.0), "The laser applies one twelfth of its DPS after five 60 Hz frames")
 	for frame in range(25):
 		voyage._advance_weapons(TICK)
-	_check(is_equal_approx(initial - target.deck.hull.integrity, 18.0), "Uninterrupted contact deals six discrete ticks in half a second")
+	_check(is_equal_approx(initial - target.deck.hull.integrity, 18.0) and is_equal_approx(voyage.deck.power.energy,79.0),
+		"Uninterrupted contact deals six discrete ticks and drains energy over half a second")
 	initial = target.deck.hull.integrity
 	voyage.heading = PI * 0.5
 	voyage._advance_weapons(TICK)
 	_check(beam.position.is_equal_approx(voyage.muzzle_position()) and not beam.beam_blocked
 		and target.deck.hull.integrity == initial, "The beam turns with its ship and damage stops when contact breaks")
-	for frame in range(90):
-		voyage._advance_weapons(TICK)
-	_check(voyage.projectiles.is_empty(), "The beam expires after its profile duration")
+	voyage._physics_process(TICK)
+	_check(voyage.projectiles.is_empty(), "Releasing fire immediately stops the beam")
+	voyage.deck.power.energy = 2.0
+	Input.action_press("flight_fire")
+	for frame in range(8):
+		voyage._physics_process(TICK)
+	_check(voyage.projectiles.is_empty() and voyage.deck.power.energy == 0.0, "The beam runs until its power reserve is exhausted")
+	voyage.deck.power.energy = 40.0
+	voyage._physics_process(TICK)
+	_check(voyage.projectiles.is_empty(), "Holding fire after depletion does not flicker the beam as energy returns")
+	Input.action_release("flight_fire")
+	voyage._physics_process(TICK)
+	Input.action_press("flight_fire")
+	voyage._physics_process(TICK)
+	Input.action_release("flight_fire")
+	_check(is_instance_valid(voyage.laser_beam), "Another press re-arms the depleted laser")
+	voyage.stop_laser()
 
 
 func _check_missile() -> void:
@@ -417,6 +433,36 @@ func _check_emp() -> void:
 		near_ship.deck._physics_process(TICK)
 	_check(near_ship.deck.emp_timers.is_empty() and near_ship.deck.module_online(near_ship.deck.weapons_tile),
 		"Disabled systems automatically return when the EMP timer ends")
+
+	_check(near_ship.deck.emp_recovery_time > 6.4 and near_ship.deck.energy_recovery_rate() < 10.0,
+		"EMP keeps reactor recovery suppressed after its brief system shutdown")
+	near_ship.deck._physics_process(6.49)
+	_check(near_ship.deck.emp_recovery_time > 0.0, "The recharge debuff lasts a full ten simulation seconds")
+	near_ship.deck._physics_process(0.02)
+	_check(near_ship.deck.emp_recovery_time == 0.0 and near_ship.deck.energy_recovery_rate() == 10.0,
+		"Normal reactor recovery comes back after the ten-second debuff")
+
+
+func _check_missile_fighter_tactics() -> void:
+	var voyage := _weapon_fixture(0)
+	voyage.set_test_damage(false, false)
+	var fighter := voyage.add_test_enemy(Voyage.Opponent.MISSILE_FIGHTER)
+	fighter.deck.power.energy = 9.0
+	var recovery := fighter.deck.power.energy
+	for frame in range(150):
+		voyage._advance_battle(TICK)
+		voyage._advance_weapons(TICK)
+	_check(fighter.conserving_power and not fighter.shot_requested and fighter.deck.power.energy > recovery,
+		"A low-energy missile fighter retreats without shooting and gains energy")
+	var closest := INF
+	var shots := 0
+	for frame in range(1700):
+		voyage._advance_battle(TICK)
+		voyage._advance_weapons(TICK)
+		closest = minf(closest, fighter.position.distance_to(voyage.ship_position))
+		if fighter.flash_remaining == Voyage.FLASH_SECONDS:
+			shots += 1
+	_check(closest > 155.0 and shots >= 4, "Missile fighters keep their distance across repeated attack and recharge cycles")
 
 
 func _check_railgun() -> void:

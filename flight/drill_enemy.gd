@@ -14,6 +14,10 @@ func _configure_deck() -> void:
 
 
 func _steer(delta: float, target_position: Vector2, target_velocity: Vector2) -> void:
+	if _conserve_if_low(16.0):
+		var away := target_position.direction_to(position)
+		_fly_towards(delta, away * 52.0, _recovery_throttle(), away.angle())
+		return
 	if _retreating:
 		_retreat_age += delta
 		var progress := (position - _retreat_origin).dot(_retreat_direction)

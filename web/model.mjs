@@ -29,7 +29,7 @@ export const WEAPON_TYPES = {
 const SPECIAL_FIELDS = {
   kinetic: {},
   laser: {
-    laser_duration: ['Длительность луча, с', 0.05, 20, 0.05, 1.4],
+    laser_energy_per_second: ['Энергия за секунду луча', 1, 100, 0.1, 42],
     laser_ticks_per_second: ['Тиков урона в секунду', 10, 15, 1, 12],
   },
   missile: {
@@ -46,6 +46,7 @@ const SPECIAL_FIELDS = {
     emp_energy_drain: ['Потеря энергии вблизи', 0, 100, 0.1, 54],
     emp_disable_duration: ['Длительность отключения, с', 0, 30, 0.1, 3.2],
     emp_systems: ['Максимум отключённых систем', 0, 6, 1, 3],
+    emp_recovery_suppression: ['Снижение регенерации вблизи на 10 с', 0, 1, 0.01, 0.65],
     emp_edge_strength: ['Доля эффекта на краю дальности', 0, 1, 0.01, 0.35],
   },
   rail: {
@@ -65,7 +66,7 @@ const SPECIAL_FIELDS = {
   },
 };
 const PRESET = {
-  laser: {damage:36,crew_damage:5,breach_chance:0.03,energy_cost:42,cooldown:2.2},
+  laser: {damage:36,crew_damage:5,breach_chance:0.03},
   missile: {damage:59,crew_damage:16,breach_chance:0.4,energy_cost:26,cooldown:2},
   emp: {damage:0,crew_damage:0,breach_chance:0,energy_cost:30,cooldown:2.6},
   rail: {damage:38,crew_damage:7,breach_chance:0.3,energy_cost:46,cooldown:3.1},
@@ -75,6 +76,8 @@ const PRESET = {
 export function weaponFields(type) {
   const fields = {...WEAPON_FIELDS,...SPECIAL_FIELDS[type]};
   if (type === 'laser') {
+    delete fields.energy_cost;
+    delete fields.cooldown;
     for(const [key,label] of Object.entries({damage:'Урон отсеку в секунду',crew_damage:'Урон экипажу в секунду',breach_chance:'Шанс пробоины за секунду'}))
       fields[key] = [label,...fields[key].slice(1)];
   }
@@ -174,9 +177,14 @@ export function weaponDefault(type='kinetic') {
 }
 
 export function upgradeWeapon(data) {
-  if (!tagged(data,'eve.weapon') || data.projectile !== 'laser') return data;
-  const {laser_range,laser_speed,...profile} = data;
+  if (!tagged(data,'eve.weapon')) return data;
+  if (data.projectile === 'emp' && !Object.hasOwn(data,'emp_recovery_suppression'))
+    return {...data,emp_recovery_suppression:0.65};
+  if (data.projectile !== 'laser') return data;
+  const {laser_range,laser_speed,laser_duration,cooldown,energy_cost,...profile} = data;
   if (!Object.hasOwn(profile,'laser_ticks_per_second')) profile.laser_ticks_per_second = 12;
+  if (!Object.hasOwn(profile,'laser_energy_per_second'))
+    profile.laser_energy_per_second = Number.isFinite(energy_cost) && energy_cost > 0 ? energy_cost : 42;
   return profile;
 }
 

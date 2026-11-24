@@ -32,8 +32,6 @@ static func begin(shot: Projectile, profile: Profile, shooter: Physics.Body, mou
 	shot.launch(shooter.model.world_point(mount, shooter.position, shooter.heading), Vector2.from_angle(angle))
 	shot.end = shot.position
 	match profile.kind:
-		Profile.Kind.LASER:
-			shot.remaining = profile.laser_duration
 		Profile.Kind.MISSILE:
 			shot.remaining = profile.missile_fuse
 			shot.velocity = Vector2.from_angle(angle) * profile.missile_speed
@@ -66,7 +64,7 @@ static func tick(shot: Projectile, delta: float, targets: Array[Target], station
 		return shot.blast_time > 0.0
 	match shot.profile.kind:
 		Profile.Kind.LASER:
-			_laser(shot, delta, targets, station)
+			return _laser(shot, delta, targets, station)
 		Profile.Kind.EMP:
 			_emp(shot, delta, targets)
 		Profile.Kind.RAIL:
@@ -102,17 +100,19 @@ static func _moving_shot(shot: Projectile, delta: float, targets: Array[Target],
 	return shot.remaining > 0.0
 
 
-static func _laser(shot: Projectile, delta: float, targets: Array[Target], station: Physics.Body) -> void:
-	var powered := false
+static func _laser(shot: Projectile, delta: float, targets: Array[Target], station: Physics.Body) -> bool:
+	var source: Deck
 	for target in targets:
 		if target.body == shot.shooter:
-			powered = not target.deck.disabled() and target.deck.weapons_are_manned()
+			source = target.deck
 			break
-	if not powered:
-		shot.remaining = 0.0
-		return
-	var step := minf(delta, shot.remaining)
-	shot.remaining -= step
+	if source == null or source.disabled() or not source.weapons_are_manned():
+		return false
+	var cost := minf(source.power.energy, shot.profile.laser_energy_per_second * delta)
+	if cost <= 0.0:
+		return false
+	source.power.spend(cost)
+	var step := cost / shot.profile.laser_energy_per_second
 	shot.position = shot.shooter.model.world_point(shot.mount, shot.shooter.position, shot.shooter.heading)
 	shot.angle = shot.shooter.heading + shot.aim_offset
 	var forward := Vector2.from_angle(shot.angle)
@@ -132,11 +132,11 @@ static func _laser(shot: Projectile, delta: float, targets: Array[Target], stati
 	shot.beam_tick_elapsed = maxf(0.0, shot.beam_tick_elapsed - ticks * interval)
 	if not hit.has("target"):
 		shot.contact_body = null
-		return
+		return source.power.energy > 0.0
 	var target: Target = hit.target
 	var side := _side(target, hit.point, forward)
 	if ticks == 0:
-		return
+		return source.power.energy > 0.0
 	var new_contact := target.body != shot.contact_body
 	if new_contact:
 		shot.contact_body = target.body
@@ -145,6 +145,7 @@ static func _laser(shot: Projectile, delta: float, targets: Array[Target], stati
 	for tick_index in range(ticks):
 		target.deck.apply_hit(shot.damage * interval, chance, shot.crew_damage * interval, side, shot.contact_tile,
 			new_contact and tick_index == 0)
+	return source.power.energy > 0.0
 
 
 static func _beam_extent(start: Vector2, direction: Vector2, polygon: PackedVector2Array, extent: float) -> float:
@@ -184,7 +185,8 @@ static func _emp(shot: Projectile, delta: float, targets: Array[Target]) -> void
 		shot.affected[target.body] = true
 		var strength := lerpf(1.0, shot.profile.emp_edge_strength, distance / shot.profile.emp_range)
 		target.deck.apply_emp(shot.profile.emp_energy_drain * strength, shot.profile.emp_disable_duration * strength,
-			ceili(shot.profile.emp_systems * strength), _side(target, closest, Vector2.from_angle(shot.angle)))
+			ceili(shot.profile.emp_systems * strength), _side(target, closest, Vector2.from_angle(shot.angle)),
+			shot.profile.emp_recovery_suppression * strength)
 
 
 # Test the moving front against the part of the hull inside the wedge, including its two radial edges.

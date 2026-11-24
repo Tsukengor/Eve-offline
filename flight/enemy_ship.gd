@@ -26,6 +26,7 @@ var heading: float:
 	set(value): body.heading = value
 var _crew_interval := 0.0
 var shot_requested := false
+var conserving_power := false
 var weapons_cooldown := 0.0
 var flash_remaining := 0.0
 
@@ -69,21 +70,35 @@ func _steer(_delta: float, _target_position: Vector2, _target_velocity: Vector2)
 	pass
 
 
-func _fly_towards(delta: float, goal_velocity: Vector2) -> void:
+func _conserve_if_low(reserve: float) -> bool:
+	if conserving_power:
+		conserving_power = deck.power.energy < reserve + 24.0
+	else:
+		conserving_power = deck.power.energy < reserve
+	return conserving_power
+
+
+func _recovery_throttle() -> float:
+	# Even with several nozzles active, normal recovery retains a net energy gain.
+	return minf(0.18, deck.energy_recovery_rate() / 52.0)
+
+
+func _fly_towards(delta: float, goal_velocity: Vector2, throttle := 1.0, aim: Variant = null) -> void:
 	var pilot := deck.pilot_efficiency()
 	var drive := deck.hull.condition(deck.engine_tile) * pilot
 	if pilot <= 0.0 or not deck.module_online(deck.engine_tile):
 		body.advance(delta, 0.0, 0.0, 0.0, false)
 		return
 	var goal := goal_velocity * lerpf(0.45, 1.0, drive)
-	var course := goal.angle()
+	var course := goal.angle() if aim == null else float(aim)
 	var forward := Vector2.from_angle(heading)
 	var error := absf(angle_difference(heading, course))
 	var deficit := (goal - velocity).dot(forward)
 	var main := clampf(deficit / 35.0, 0.0, 1.0) * drive if error < 0.48 else 0.0
 	# Bleed sideways drift while applying forward thrust, and brake while turning.
-	var trim := goal if error < 0.48 else Vector2.ZERO
-	body.advance(delta, main, body.turn_toward(course, pilot), drive * 0.70, false, true, trim)
+	var trim := goal if aim != null or error < 0.48 else Vector2.ZERO
+	body.advance(delta, main * throttle, body.turn_toward(course, pilot) * throttle,
+		drive * 0.70 * throttle, false, true, trim)
 
 
 func can_ram() -> bool:

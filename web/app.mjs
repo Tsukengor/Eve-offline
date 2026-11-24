@@ -327,7 +327,7 @@ function readWeapon() {
   $('weapon-title').textContent=draft.name||'Без названия';
   $('weapon-stats').replaceChildren(...Object.entries(fields).map(([key,[label]])=>{
     const row=element('div'),value=draft[key];
-    row.append(element('dt',label),element('dd',Number.isFinite(value)?(['breach_chance','emp_edge_strength','rail_retention'].includes(key)?Math.round(value*100)+' %':String(value)):'—'));
+    row.append(element('dt',label),element('dd',Number.isFinite(value)?(['breach_chance','emp_edge_strength','emp_recovery_suppression','rail_retention'].includes(key)?Math.round(value*100)+' %':String(value)):'—'));
     return row;
   }));
   $('add-mount').disabled=mounts.length>=12;

@@ -17,7 +17,7 @@ enum Kind { KINETIC, LASER, MISSILE, EMP, RAIL, FLAK, PUSH }
 @export var title := "Кинетика"
 
 @export_group("Laser")
-@export_range(0.05, 20, 0.05) var laser_duration := 1.4
+@export_range(1, 100, 0.1) var laser_energy_per_second := 42.0
 @export_range(10, 15, 1) var laser_ticks_per_second := 12
 
 @export_group("Missile")
@@ -34,6 +34,7 @@ enum Kind { KINETIC, LASER, MISSILE, EMP, RAIL, FLAK, PUSH }
 @export_range(0, 100, 0.1) var emp_energy_drain := 54.0
 @export_range(0, 30, 0.1) var emp_disable_duration := 3.2
 @export_range(0, 6, 1) var emp_systems := 3
+@export_range(0.0, 1.0) var emp_recovery_suppression := 0.65
 @export_range(0.0, 1.0) var emp_edge_strength := 0.35
 
 @export_group("Railgun")

@@ -67,7 +67,7 @@ func _draw() -> void:
 		_draw_map_sidebar()
 	else:
 		_draw_flight_sidebar()
-	_text(voyage.notice, Vector2(32, 630), 15, MUTED)
+	_text(voyage.training_hint if voyage.in_training else voyage.notice, Vector2(32, 630), 15, ACCENT if voyage.in_training else MUTED)
 
 
 func _draw_grid() -> void:
@@ -156,7 +156,7 @@ func _draw_ship_metrics(baseline: float) -> void:
 func _draw_energy(y: float) -> void:
 	var energy := voyage.deck.power.energy
 	var power := Voyage.DeckSimulation.ShipPower
-	_metric("Энергия", "%d / %d" % [floori(energy), power.CAPACITY], y, AMBER if energy >= power.LOW_ENERGY else DANGER)
+	_metric("Энергия · ЭМИ" if voyage.deck.emp_recovery_time > 0.0 else "Энергия", "%d / %d" % [floori(energy), power.CAPACITY], y, AMBER if energy >= power.LOW_ENERGY else DANGER)
 
 
 func _draw_objective(baseline: float) -> void:
@@ -164,6 +164,11 @@ func _draw_objective(baseline: float) -> void:
 	if not voyage.battle_result.is_empty():
 		_section("ИСХОД БОЯ", baseline, ACCENT)
 		_text(voyage.battle_result, Vector2(816, baseline + 30), 18, TEXT)
+		return
+
+	if voyage.in_training:
+		_section("ОБУЧЕНИЕ  %d / 8" % voyage.training_step, baseline, ACCENT)
+		_text("Эвакуация завершена" if voyage.stage == Voyage.Stage.COMPLETE else "Учебный рейс", Vector2(816, baseline + 28), 17)
 		return
 
 	match voyage.stage:

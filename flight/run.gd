@@ -3,21 +3,30 @@ extends Node2D
 const Voyage = preload("res://flight/voyage_state.gd")
 const SpaceDisplay = preload("res://flight/space_display.gd")
 const DeckDisplay = preload("res://deck/deck_view.gd")
+const Training = preload("res://flight/training.gd")
+const SHOT_SOUND := preload("res://assets/audio/shot.wav")
+const PULSE_SOUND := preload("res://assets/audio/pulse.wav")
+const LASER_SOUND := preload("res://assets/audio/laser.wav")
 
 enum Mode { FLIGHT, DECK, MAP }
+enum Session { CAMPAIGN, TRAINING, ARENA }
 
 @onready var voyage: Voyage = $Voyage
 @onready var space: SpaceDisplay = $Space
 @onready var deck: DeckDisplay = $Deck
 
+var session := Session.CAMPAIGN
 var mode := Mode.FLIGHT
+var _training: Training
+var _shot_audio: AudioStreamPlayer
+var _laser_audio: AudioStreamPlayer
 var _mode_before_map := Mode.FLIGHT
 var _paused_before_map := false
 var _nav: Array[Button] = []
 var _space_pause: Button
 var _space_reset: Button
 var _action: Button
-var _arena_button: Button
+var _menu_button: Button
 var _computer_button: Button
 var _flak_button: Button
 var _spawn_missile_fighter: Button
@@ -39,7 +48,7 @@ func _ready() -> void:
 	for index in range(labels.size()):
 		_nav.append(_button(labels[index], Vector2(496 + index * 97, 46), Vector2(90, 42),
 			_navigate.bind(index), true))
-	_arena_button = _button("Полигон", Vector2(388, 46), Vector2(100, 42), _toggle_arena)
+	_menu_button = _button("Меню", Vector2(388, 46), Vector2(100, 42), _return_to_menu)
 	_space_pause = _button("Пауза", Vector2(796, 46), Vector2(164, 42), _toggle_pause)
 	_space_reset = _button("Сброс", Vector2(972, 46), Vector2(116, 42), _reset)
 	_action = _button("Стыковка", Vector2(816, 538), Vector2(252, 40), _interact)
@@ -61,17 +70,34 @@ func _ready() -> void:
 	_alert.add_theme_color_override("font_shadow_color", Color("#090e15"))
 	_alert.add_theme_constant_override("shadow_offset_y", 2)
 	deck.simulation.damage_alert.connect(_show_alert)
+	voyage.in_arena = session == Session.ARENA
+	voyage.in_training = session == Session.TRAINING
+	_shot_audio = AudioStreamPlayer.new()
+	_shot_audio.bus = &"Weapons"
+	_shot_audio.max_polyphony = 8
+	add_child(_shot_audio)
+	_laser_audio = AudioStreamPlayer.new()
+	_laser_audio.bus = &"Weapons"
+	var loop := LASER_SOUND.duplicate() as AudioStreamWAV
+	loop.loop_mode = AudioStreamWAV.LOOP_FORWARD
+	loop.loop_end = roundi(loop.get_length() * loop.mix_rate)
+	_laser_audio.stream = loop
+	add_child(_laser_audio)
+	voyage.weapon_fired.connect(_play_shot)
 	space.voyage = voyage
 	space.destination_selected.connect(_select_destination)
 	deck.reset_requested.connect(_reset)
 	voyage.changed.connect(_refresh)
 	voyage.configure(deck.simulation)
+	if voyage.in_training:
+		_training = Training.new()
+		_training.reset(voyage)
 	_apply_mode()
 
 
 func _navigate(destination: Mode) -> void:
 	if destination == Mode.MAP:
-		if voyage.in_arena:
+		if voyage.in_arena or voyage.in_training:
 			return
 		if mode == Mode.MAP:
 			_leave_map(_mode_before_map)
@@ -105,9 +131,10 @@ func _apply_mode() -> void:
 	_space_pause.visible = mode == Mode.FLIGHT
 	_space_reset.visible = mode != Mode.DECK
 	_action.visible = mode != Mode.DECK and not voyage.in_arena
-	_arena_button.visible = mode != Mode.DECK
-	_arena_button.text = "Рейс" if voyage.in_arena else "Полигон"
-	_nav[Mode.MAP].disabled = voyage.in_arena
+	_menu_button.position = Vector2(972, 651) if mode == Mode.DECK else Vector2(388, 46)
+	_nav[Mode.MAP].disabled = voyage.in_arena or voyage.in_training
+	if not voyage.manual_control:
+		voyage.stop_laser()
 	deck._refresh()
 	_refresh()
 
@@ -159,6 +186,8 @@ func _interact() -> void:
 func _toggle_pause() -> void:
 	if mode != Mode.MAP:
 		get_tree().paused = not get_tree().paused
+		if get_tree().paused:
+			voyage.stop_laser()
 		deck._refresh()
 		_refresh()
 
@@ -275,10 +304,32 @@ func _physics_process(_delta: float) -> void:
 
 
 func _process(delta: float) -> void:
+	if _training != null and not get_tree().paused:
+		_training.advance(mode == Mode.DECK)
+	if DisplayServer.get_name() != "headless":
+		var playing_laser := is_instance_valid(voyage.laser_beam) and not get_tree().paused
+		if playing_laser and not _laser_audio.playing:
+			_laser_audio.play()
+		elif not playing_laser and _laser_audio.playing:
+			_laser_audio.stop()
 	if _alert_time > 0.0:
 		_alert_time = maxf(_alert_time - delta, 0.0)
 		if _alert_time == 0.0:
 			_alert.hide()
+
+
+func _play_shot(kind: int) -> void:
+	if DisplayServer.get_name() == "headless":
+		return
+	var sound := PULSE_SOUND if kind in [Voyage.WeaponProfile.Kind.EMP, Voyage.WeaponProfile.Kind.PUSH] else SHOT_SOUND
+	if _shot_audio.stream != sound:
+		_shot_audio.stream = sound
+	_shot_audio.play()
+
+
+func _return_to_menu() -> void:
+	get_tree().paused = false
+	get_tree().change_scene_to_file("res://ui/main_menu.tscn")
 
 
 func _toggle_arena() -> void:
@@ -294,6 +345,8 @@ func _reset() -> void:
 	space.selected = -1
 	_alert_time = 0.0
 	voyage.reset()
+	if _training != null:
+		_training.reset(voyage)
 	deck._select(1)
 	_apply_mode()
 
@@ -301,29 +354,22 @@ func _reset() -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if not (event is InputEventKey and event.pressed and not event.echo):
 		return
-	match event.physical_keycode:
-		KEY_TAB:
-			_navigate(Mode.FLIGHT if mode == Mode.DECK else Mode.DECK)
-		KEY_M:
-			_navigate(Mode.MAP)
-		KEY_ESCAPE:
-			if mode == Mode.MAP:
-				_leave_map(_mode_before_map)
-			else:
-				return
-		KEY_SPACE:
-			_toggle_pause()
-		KEY_E:
-			if mode != Mode.FLIGHT:
-				return
-			_interact()
-		KEY_ENTER:
-			if mode != Mode.MAP:
-				return
-			_interact()
-		_:
-			return
+	if event.is_action_pressed("toggle_deck", false, true):
+		_navigate(Mode.FLIGHT if mode == Mode.DECK else Mode.DECK)
+	elif event.is_action_pressed("toggle_map", false, true):
+		_navigate(Mode.MAP)
+	elif event.physical_keycode == KEY_ESCAPE and mode == Mode.MAP:
+		_leave_map(_mode_before_map)
+	elif event.is_action_pressed("tactical_pause", false, true):
+		_toggle_pause()
+	elif event.is_action_pressed("dock_ship", false, true) and mode == Mode.FLIGHT:
+		_interact()
+	elif event.is_action_pressed("confirm_jump", false, true) and mode == Mode.MAP:
+		_interact()
+	else:
+		return
 	get_viewport().set_input_as_handled()
+
 
 
 func _button(title: String, at: Vector2, size: Vector2, callback: Callable, toggle := false) -> Button:

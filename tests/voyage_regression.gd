@@ -97,9 +97,87 @@ func _test_voyage() -> void:
 	_check(_voyage.deck.engine_health == 1.0 and _voyage.deck.airlock_progress == 0.0
 		and _voyage.delivered == 0 and not _voyage.incident_seen, "Reset clears all voyage and deck state")
 	await _test_unbounded_flight_and_weapon()
+	await _test_menu_and_training()
 	if _failures == 0:
 		print("Voyage regression checks passed.")
 	quit(_failures)
+
+
+func _test_menu_and_training() -> void:
+	_run.free()
+	var settings = root.get_node("GameSettings")
+	var test_config := "user://settings-regression.cfg"
+	_check(settings.rebind("flight_fire", KEY_R).is_empty()
+		and not settings.rebind("flight_fire", KEY_W).is_empty()
+		and settings.key_label("flight_fire") == "R", "A conflicting binding preserves both shortcuts")
+	settings.set_volume("Weapons", 0.35)
+	_check(settings.save_settings(test_config) == OK, "Settings are written to disk")
+	settings.reset_keyboard()
+	settings.load_settings(test_config)
+	var fire_key: InputEventKey = InputMap.action_get_events("flight_fire")[0]
+	_check(fire_key.physical_keycode == KEY_R and is_equal_approx(settings.volumes["Weapons"], 0.35)
+		and is_equal_approx(settings.volumes["Alerts"], 1.0), "The assigned shortcut and individual channel volume reload")
+	settings.load_settings()
+	DirAccess.remove_absolute(test_config)
+
+	var menu = load(ProjectSettings.get_setting("application/run/main_scene")).instantiate()
+	root.add_child(menu)
+	current_scene = menu
+	_check(menu._panel.get_child_count() == 6, "The entry scene offers five menu actions")
+	menu._show_campaign()
+	_check(menu._panel.get_child(1).text.contains("Каскад"), "The campaign lists the existing rescue mission")
+	menu._show_settings()
+	_check(menu._binding_buttons.has("flight_fire"), "The settings page exposes the fire binding")
+	menu._start(Run.Session.TRAINING)
+	await process_frame
+	_run = current_scene
+	_voyage = _run.voyage
+	var training := _run._training
+	_check(_voyage.in_training and training.step == Run.Training.Step.TURN,
+		"The training button launches the first objective")
+
+	_train_until_next("flight_turn_right", 180)
+	_train_until_next("flight_thrust", 240)
+	_train_until_next("flight_brake", 300)
+	_train_until_next("flight_fire", 240)
+	_check(training.step == Run.Training.Step.SEAL and _voyage.deck.hull.breaches.size() == 1,
+		"Real steering, thrust, braking and shooting create the training breach")
+	if not _voyage.deck.hull.breaches.is_empty():
+		_key(KEY_TAB)
+		_key(KEY_2)
+		_click(_run.deck._cell_center(_voyage.deck.hull.breaches.keys()[0]), MOUSE_BUTTON_RIGHT)
+		_train_until_next("", 420)
+		_check(training.step == Run.Training.Step.PREPARE, "Repairing the training breach advances the objective")
+		_key(KEY_3)
+		_click(_run.deck._cell_center(_voyage.deck.airlock_tile), MOUSE_BUTTON_RIGHT)
+		_train_until_next("", 420)
+		_check(training.step == Run.Training.Step.APPROACH, "Preparing the airlock enables the approach")
+		_key(KEY_TAB)
+		_voyage.ship_position = _voyage.station_position() + Vector2(-94, 0)
+		_voyage.velocity = Vector2.ZERO
+		training.advance(false)
+		_key(KEY_E)
+		training.advance(false)
+		_check(training.step == Run.Training.Step.COMPLETE and _voyage.delivered == 8,
+			"Docking after the training objectives completes evacuation")
+	_run._return_to_menu()
+	await process_frame
+	await process_frame
+	_check(current_scene != null and current_scene.scene_file_path == "res://ui/main_menu.tscn",
+		"Returning from a run restores the main menu")
+
+
+func _train_until_next(action: String, limit: int) -> void:
+	var step := _run._training.step
+	if not action.is_empty():
+		Input.action_press(action)
+	for frame in limit:
+		_tick(1)
+		_run._training.advance(_run.mode == Run.Mode.DECK)
+		if _run._training.step != step:
+			break
+	if not action.is_empty():
+		Input.action_release(action)
 
 
 func _test_ship_physics() -> void:

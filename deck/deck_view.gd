@@ -1,5 +1,7 @@
 extends Node2D
 
+@onready var _settings = get_node("/root/GameSettings")
+
 signal reset_requested
 
 const DeckSimulation = preload("res://deck/deck_simulation.gd")
@@ -107,6 +109,7 @@ func _ready() -> void:
 		selected_style.border_width_left = 3
 		_crew_selected_styles.append(selected_style)
 	_audio = AudioStreamPlayer.new()
+	_audio.bus = &"Alerts"
 	_audio.volume_db = -8.0
 	add_child(_audio)
 	simulation.damage_alert.connect(_play_alert)
@@ -208,12 +211,15 @@ func _unhandled_input(event: InputEvent) -> void:
 	if not is_visible_in_tree():
 		return
 	if event is InputEventKey and event.pressed and not event.echo:
-		if standalone and event.physical_keycode == KEY_SPACE:
+		if standalone and event.is_action_pressed("tactical_pause", false, true):
 			_toggle_pause()
 			get_viewport().set_input_as_handled()
-		elif event.physical_keycode >= KEY_1 and event.physical_keycode < KEY_1 + simulation.crew.size():
-			_select(event.physical_keycode - KEY_1)
-			get_viewport().set_input_as_handled()
+		else:
+			for index in range(simulation.crew.size()):
+				if event.is_action_pressed("crew_%d" % (index + 1), false, true):
+					_select(index)
+					get_viewport().set_input_as_handled()
+					break
 	if event is InputEventMouse:
 		var point: Vector2 = get_global_transform_with_canvas().affine_inverse() * event.position
 		var tile := Vector2i(((point - _deck_origin) / _deck_cell).floor())
@@ -226,9 +232,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		if not (event is InputEventMouseButton and event.pressed):
 			return
 		if event.button_index == MOUSE_BUTTON_LEFT:
-			_select_or_toggle(point, event.shift_pressed)
+			_select_or_toggle(point, _settings.order_modifier(event))
 		elif event.button_index == MOUSE_BUTTON_RIGHT:
-			simulation.assign_order(_selected, tile, event.shift_pressed)
+			simulation.assign_order(_selected, tile, _settings.order_modifier(event))
 
 
 func _select_or_toggle(point: Vector2, automatic: bool) -> void:
@@ -277,14 +283,16 @@ func _draw() -> void:
 	_draw_meter("Кислород в отсеке", air, 540, ACCENT if air >= DeckSimulation.Hull.LOW_OXYGEN else DANGER)
 	var charge := simulation.power.energy / DeckSimulation.ShipPower.CAPACITY
 	_draw_meter("Энергия", charge, 581, AMBER if charge >= 0.12 else DANGER)
-	_text("Реактор  +%.1f ед/с" % simulation.energy_recovery_rate(), Vector2(792, 618), 14, MUTED)
+	_text("Реактор  +%.1f ед/с%s" % [simulation.energy_recovery_rate(), " · ЭМИ" if simulation.emp_recovery_time > 0.0 else ""], Vector2(792, 618), 14, MUTED)
 	_text("Отсек  %d%%" % floori(simulation.hull.condition(readout) * 100.0), Vector2(970, 618), 15, MUTED)
 	if standalone:
 		if simulation.engine_health >= 1.0 and simulation.airlock_progress >= 1.0:
 			_text("Корабль готов к спасательной операции", Vector2(54, 608), 17, ACCENT)
 		else:
 			_text("Восстановите двигатель и подготовьте шлюз", Vector2(54, 608), 17)
-	if not simulation.notice.is_empty():
+	if not simulation.training_hint.is_empty():
+		_text(simulation.training_hint, Vector2(54, 664), 15, ACCENT)
+	elif not simulation.notice.is_empty():
 		_text(simulation.notice, Vector2(54, 663), 15, MUTED)
 
 
