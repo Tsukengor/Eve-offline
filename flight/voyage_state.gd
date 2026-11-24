@@ -2,7 +2,9 @@ extends Node
 
 signal changed
 signal weapon_fired(kind: int)
+signal defeat_started
 
+const Adventure = preload("res://flight/adventure.gd")
 const DeckSimulation = preload("res://deck/deck_simulation.gd")
 const WeaponProfile = preload("res://flight/weapon_profile.gd")
 const Projectile = preload("res://flight/projectile.gd")
@@ -39,6 +41,12 @@ const SYSTEMS := [
 		"position": Vector2(592, 159), "arrival": Vector2(119, 353)},
 	{"name": "Рубеж", "station": "Перевал", "map": Vector2(601, 292),
 		"position": Vector2(579, 291), "arrival": Vector2(126, 129)},
+	{"name": "Свалка", "station": "Сборщик", "map": Vector2(302, 338),
+		"position": Vector2(630, 252), "arrival": Vector2(100, 366)},
+	{"name": "Гроза", "station": "Кромка", "map": Vector2(580, 115),
+		"position": Vector2(660, 208), "arrival": Vector2(142, 410)},
+	{"name": "Гнездо", "station": "Якорь", "map": Vector2(441, 237),
+		"position": Vector2(690, 276), "arrival": Vector2(80, 315)},
 ]
 # Start system, end system and fuel cost. Routes work in both directions.
 const ROUTES := [Vector3i(HOME, DISTRESS, 2), Vector3i(DISTRESS, REFUGE, 3)]
@@ -50,7 +58,12 @@ const STATION_SIZE := 392.0
 const STATION_SPIN := 0.035
 const DOCK_RADIUS := 230.0
 const DOCK_SECONDS := 1.65
-const PASSIVE_ANGULAR_DECELERATION := 0.16
+const PLAYER_TURN_SCALE := 1.5
+const PASSIVE_ANGULAR_DECELERATION := 0.24
+const DEFEAT_SECONDS := 2.25
+const ADVENTURE_FUEL := 8
+const ION_CLOUDS := [Vector3(-330, 137, 116), Vector3(-130, 239, 91)]
+const DEBRIS := preload("res://assets/flight/drill_enemy_derelict.png")
 const MAX_SPEED := 225.0
 const MAX_SPIN := 3.3
 const FLASH_SECONDS := 0.10
@@ -133,6 +146,10 @@ var test_thrust := 1.0
 var _spawn_slot := 0
 var _cascade_enemy: EnemyShip
 var battle_result := ""
+var defeat_elapsed := 0.0
+var defeat_hull := false
+var adventure: Adventure
+var adventure_save_path := Adventure.SAVE_PATH
 
 
 func configure(ship_deck: DeckSimulation) -> void:
@@ -140,6 +157,7 @@ func configure(ship_deck: DeckSimulation) -> void:
 	_voyage_weapon = weapon
 	body.model = RESCUE_MODEL
 	body.passive_angular_deceleration = PASSIVE_ANGULAR_DECELERATION
+	body.turn_scale = PLAYER_TURN_SCALE
 	body.power = deck.power
 	body.shield = Physics.Shield.new()
 	station_body.model = STATION_MODEL
@@ -156,6 +174,8 @@ func reset() -> void:
 		_cascade_enemy.queue_free()
 	_cascade_enemy = null
 	battle_result = ""
+	defeat_elapsed = 0.0
+	defeat_hull = false
 	scan_enemy = false
 	current_system = HOME
 	fuel = FULL_FUEL
@@ -172,6 +192,10 @@ func reset() -> void:
 	set_test_damage(player_damage, enemy_damage)
 	notice = "Получен сигнал бедствия со станции «Каскад»."
 	deck.reset(true)
+	deck.reactor_multiplier = 1.0
+	body.turn_scale = PLAYER_TURN_SCALE
+	body.shield.capacity = Physics.Shield.CAPACITY
+	body.shield.reset()
 	if in_arena:
 		notice = "Полигон готов."
 	changed.emit()
@@ -288,6 +312,18 @@ func _spawn_ship() -> void:
 	thrusting = false
 
 
+func system_count() -> int:
+	return SYSTEMS.size() if adventure != null else 3
+
+
+func routes() -> Array:
+	return ROUTES + Adventure.ROUTES if adventure != null else ROUTES
+
+
+func fuel_capacity() -> int:
+	return ADVENTURE_FUEL if adventure != null else FULL_FUEL
+
+
 func station_position() -> Vector2:
 	return SYSTEMS[current_system].position
 
@@ -297,7 +333,7 @@ func distance_to_station() -> float:
 
 
 func route_cost(destination: int) -> int:
-	for route: Vector3i in ROUTES:
+	for route: Vector3i in routes():
 		if (route.x == current_system and route.y == destination
 				or route.y == current_system and route.x == destination):
 			return route.z
@@ -313,7 +349,7 @@ func jump_blocker(destination: int) -> String:
 		return "Полигон находится вне звёздной карты."
 	if stage == Stage.COMPLETE or not battle_result.is_empty():
 		return "Рейс завершён."
-	if destination < 0 or destination >= SYSTEMS.size():
+	if destination < 0 or destination >= system_count():
 		return "Выберите систему на карте."
 	if destination == current_system:
 		return "Корабль уже в этой системе."
@@ -335,6 +371,12 @@ func jump(destination: int) -> bool:
 	current_system = destination
 	wrecks.assign(_wrecks_by_system.get(destination, []))
 	_spawn_ship()
+	if adventure != null:
+		_clear_enemies()
+		_enter_adventure_sector()
+		notice = "Вход в систему «%s»." % SYSTEMS[destination].name
+		changed.emit()
+		return true
 	enemies.clear()
 	drones.clear()
 	scan_index = 0
@@ -364,11 +406,13 @@ func dock_blocker() -> String:
 		return "Рейс завершён."
 	if docked:
 		return ""
+	if adventure != null and (not enemies.is_empty() or not drones.is_empty()):
+		return "Причал закрыт во время боя."
 	if distance_to_station() > DOCK_RANGE:
 		return "Войдите в зону стыковки."
 	if velocity.length() > DOCK_SPEED:
 		return "Снизьте скорость до %d ед/с." % int(DOCK_SPEED)
-	if current_system == DISTRESS and stage == Stage.ANSWER_DISTRESS and (deck.airlock_progress < 1.0 or not deck.module_online(deck.airlock_tile)):
+	if adventure == null and current_system == DISTRESS and stage == Stage.ANSWER_DISTRESS and (deck.airlock_progress < 1.0 or not deck.module_online(deck.airlock_tile)):
 		return "Подготовьте шлюз на палубе."
 	return ""
 
@@ -425,6 +469,9 @@ func _advance_station(delta: float) -> void:
 
 func _finish_docking() -> void:
 	docked = true
+	if adventure != null:
+		_arrive_at_adventure_station()
+		return
 	if in_training:
 		deck.board_passengers(RESCUE_COUNT)
 		delivered = RESCUE_COUNT
@@ -452,6 +499,10 @@ func _finish_docking() -> void:
 
 func _physics_process(delta: float) -> void:
 	delta *= simulation_speed
+	if not battle_result.is_empty():
+		_advance_defeat(delta)
+		return
+	_apply_ion_hazards(delta)
 	if not in_arena:
 		station_body.heading = wrapf(station_body.heading + station_body.spin * delta, -PI, PI)
 	var firing := (manual_control and not docked and docking_time <= 0.0 and stage != Stage.COMPLETE
@@ -471,6 +522,9 @@ func _physics_process(delta: float) -> void:
 	var changed_shield := body.shield.advance(delta, deck.operator_at(DeckSimulation.WorkPose.SHIELD) != null)
 	var changed_flight := advance_flight(delta, steering, forward_thrust, braking, stabilized)
 	var changed_battle := _advance_battle(delta)
+	if not battle_result.is_empty():
+		changed.emit()
+		return
 	if not in_arena:
 		_advance_station(delta)
 	var changed_wrecks := _advance_wrecks(delta)
@@ -635,12 +689,7 @@ func _advance_battle(delta: float) -> bool:
 	if not battle_result.is_empty() or stage == Stage.COMPLETE:
 		return false
 	if deck.disabled():
-		battle_result = "Корабль потерян"
-		thrusting = false
-		turn_input = 0.0
-		acceleration = Vector2.ZERO
-		body.active.clear()
-		notice = "Корабль потерян. Нажмите «Сброс»."
+		_begin_defeat()
 		return true
 	if enemies.is_empty() and drones.is_empty():
 		return false
@@ -653,6 +702,13 @@ func _advance_battle(delta: float) -> bool:
 		if hostile.disabled():
 			if not in_training:
 				_add_wreck(hostile)
+			if adventure != null and hostile.encounter_slot >= 0:
+				var away := ship_position.direction_to(hostile.position)
+				if away.is_zero_approx():
+					away = Vector2.UP
+				var at := hostile.position + away.orthogonal() * 46.0
+				var kind: int = Adventure.ENCOUNTERS[current_system][hostile.encounter_slot]
+				adventure.record_defeat(current_system, hostile.encounter_slot, at, kind)
 			notice = "%s выведен из строя." % hostile.call_sign
 			if hostile != _cascade_enemy:
 				hostile.queue_free()
@@ -821,6 +877,219 @@ func _resolve_enemy_contact(hostile: EnemyShip, delta: float) -> void:
 			deck.apply_hit(hostile.ram_damage, 0.35, 0.0, side)
 		hostile.on_ram(hit.point)
 		notice = "Удар бура. Проверьте отсеки на палубе."
+
+
+func start_adventure(continue_saved: bool) -> void:
+	var saved := Adventure.new()
+	saved.save_path = adventure_save_path
+	var restored := continue_saved and saved.load_checkpoint(SYSTEMS.size())
+	adventure = null
+	reset()
+	adventure = saved
+	current_system = adventure.saved_system
+	fuel = fuel_capacity()
+	_spawn_ship()
+	_enter_adventure_sector()
+	_apply_adventure_upgrades()
+	weapon = TEST_WEAPONS[adventure.slots[adventure.equipped]]
+	_sync_freight()
+	if restored:
+		for index in adventure.crew_health.size():
+			if adventure.crew_health[index] <= 0.0:
+				deck._hurt_crew(deck.crew[index], 100.0)
+	_moor_at_checkpoint()
+	notice = "Загружено сохранение на станции." if restored else "Откройте верфь, чтобы взять первый контракт."
+	if not continue_saved:
+		_save_adventure()
+	changed.emit()
+
+
+func _moor_at_checkpoint() -> void:
+	var approach := station_position().direction_to(ship_position)
+	dock_angle = snappedf(approach.angle(), PI * 0.5)
+	_dock_start_bearing = dock_angle
+	_dock_start_radius = DOCK_RADIUS
+	_dock_start_heading = dock_angle + PI
+	body.fixed = true
+	docked = true
+	docking_time = 0.0
+	_advance_station(0.0)
+
+
+func _enter_adventure_sector() -> void:
+	var opponents: Array = Adventure.ENCOUNTERS.get(current_system, [])
+	for slot: int in adventure.remaining(current_system):
+		var relative := Vector2(330.0 + 75.0 * slot, (155.0 if slot % 2 == 0 else -152.0))
+		var at := ship_position + relative.rotated(heading)
+		var from_station := at - station_position()
+		if from_station.length() < DOCK_RANGE + 38.0:
+			at = station_position() + from_station.normalized() * (DOCK_RANGE + 38.0)
+		var hostile := _spawn_enemy(at, opponents[slot])
+		hostile.encounter_slot = slot
+		enemies.append(hostile)
+	if current_system != Adventure.SCRAP or _wrecks_by_system.has(current_system):
+		return
+	for offset: Vector2 in [Vector2(-328, 76), Vector2(-315, -68), Vector2(-145, 248), Vector2(-54, -240)]:
+		var debris := Wreck.new()
+		var obstacle := Physics.Body.new()
+		obstacle.model = RESCUE_MODEL
+		obstacle.position = station_position() + offset
+		obstacle.heading = offset.angle() + 0.78
+		debris.collider = obstacle
+		debris.position = obstacle.position
+		debris.rotation = obstacle.heading + PI * 0.5
+		debris.texture = DEBRIS
+		debris.size = 72.0
+		debris.age = 4.0
+		wrecks.append(debris)
+
+
+func _apply_ion_hazards(delta: float) -> void:
+	if adventure == null or current_system != Adventure.ION:
+		return
+	if not docked and _inside_ion(ship_position):
+		deck.power.spend(minf(deck.power.energy, 13.0 * delta))
+	for hostile in enemies:
+		if _inside_ion(hostile.position):
+			hostile.deck.power.spend(minf(hostile.deck.power.energy, 13.0 * delta))
+
+
+func _inside_ion(point: Vector2) -> bool:
+	for cloud: Vector3 in ION_CLOUDS:
+		var center := station_position() + Vector2(cloud.x, cloud.y)
+		if point.distance_to(center) < cloud.z:
+			return true
+	return false
+
+
+func _arrive_at_adventure_station() -> void:
+	fuel = fuel_capacity()
+	deck.service_at_station()
+	body.shield.reset()
+	var completed := adventure.settle(current_system)
+	_sync_freight()
+	notice = "Контракты сданы. Кредиты и детали зачислены." if not completed.is_empty() else "Станция пополнила топливо и обслужила корабль."
+	_save_adventure()
+
+
+func _save_adventure() -> void:
+	var health: Array[float] = []
+	for member in deck.crew:
+		health.append(member.health)
+	if adventure.save(current_system, health) != OK:
+		notice += " Сохранение не записано."
+
+
+func _sync_freight() -> void:
+	deck.freight_count = 0
+	if adventure != null:
+		for index in adventure.accepted:
+			if index not in adventure.settled and not Adventure.CONTRACTS[index].battle:
+				deck.freight_count += 1
+
+
+func salvage_contact() -> Adventure.SalvageCrate:
+	if adventure == null or docked or not battle_result.is_empty():
+		return null
+	return adventure.nearest_container(current_system, ship_position)
+
+
+func interact() -> void:
+	var item := salvage_contact()
+	if item == null:
+		toggle_docking()
+		return
+	if velocity.length() > Adventure.PICKUP_SPEED:
+		notice = "Сбавьте скорость до 75 ед/с для подбора."
+	else:
+		adventure.collect(current_system, item)
+		notice = "Подобрано %d кр. и %d дет." % [item.credits, item.parts]
+	changed.emit()
+
+
+func accept_contract(index: int) -> bool:
+	if adventure == null or not docked or not adventure.can_accept(index, current_system):
+		return false
+	adventure.accepted.append(index)
+	_sync_freight()
+	_save_adventure()
+	changed.emit()
+	return true
+
+
+func refit(module: String) -> bool:
+	if adventure == null or not docked or not adventure.buy_module(module):
+		return false
+	_apply_adventure_upgrades()
+	_save_adventure()
+	changed.emit()
+	return true
+
+
+func purchase_weapon(index: int) -> bool:
+	if adventure == null or not docked or not adventure.buy_weapon(index):
+		return false
+	_save_adventure()
+	changed.emit()
+	return true
+
+
+func mount_weapon(slot: int, profile: int) -> bool:
+	if adventure == null or not docked or not adventure.equip_weapon(slot, profile):
+		return false
+	weapon = TEST_WEAPONS[adventure.slots[adventure.equipped]]
+	_save_adventure()
+	changed.emit()
+	return true
+
+
+func cycle_weapon() -> void:
+	if adventure == null or not battle_result.is_empty():
+		return
+	stop_laser()
+	_laser_spent = Input.is_action_pressed("flight_fire")
+	adventure.equipped = 1 - adventure.equipped
+	weapon = TEST_WEAPONS[adventure.slots[adventure.equipped]]
+	if docked:
+		_save_adventure()
+	changed.emit()
+
+
+func _apply_adventure_upgrades() -> void:
+	body.turn_scale = PLAYER_TURN_SCALE * (1.0 + adventure.levels.thrusters * 0.2)
+	deck.reactor_multiplier = 1.0 + adventure.levels.reactor * 0.2
+	deck.upgrade_levels = adventure.levels.duplicate()
+	body.shield.capacity = Physics.Shield.CAPACITY + adventure.levels.shield * 25.0
+	body.shield.reset()
+
+
+func _begin_defeat() -> void:
+	battle_result = "Корабль потерян"
+	defeat_hull = deck.hull.integrity <= 0.0
+	defeat_elapsed = 0.0
+	stop_laser()
+	thrusting = false
+	turn_input = 0.0
+	acceleration = Vector2.ZERO
+	body.active.clear()
+	_discard_projectiles()
+	notice = ""
+	defeat_started.emit()
+
+
+func _discard_projectiles() -> void:
+	for projectile in projectiles:
+		projectile.queue_free()
+	projectiles.clear()
+
+
+func _advance_defeat(delta: float) -> void:
+	if defeat_elapsed >= DEFEAT_SECONDS:
+		return
+	defeat_elapsed = minf(DEFEAT_SECONDS, defeat_elapsed + delta)
+	ship_position += velocity * delta * 0.42
+	heading = wrapf(heading + angular_velocity * delta * 0.5, -PI, PI)
+	changed.emit()
 
 
 func _resolve_contact() -> void:

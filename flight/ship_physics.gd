@@ -20,6 +20,7 @@ class Body:
 	var fixed := false
 	var mass_scale := 1.0
 	var thrust_scale := 1.0
+	var turn_scale := 1.0
 	var active: Dictionary[int, float] = {}
 
 	func advance(delta: float, main: float, turn: float, brake: float, damp_spin: bool, assisted_brake := true, velocity_goal := Vector2.ZERO) -> float:
@@ -43,6 +44,8 @@ class Body:
 				requested = clampf(-spin * model.moment * mass_scale / (delta * capacity), -1.0, 1.0)
 		for i in range(model.nozzle_points.size()):
 			var local := model.local_force(i) * thrust_scale
+			if model.nozzle_groups[i] in [Model.Group.TURN_LEFT, Model.Group.TURN_RIGHT]:
+				local *= turn_scale
 			var throttle := 0.0
 			var group := model.nozzle_groups[i]
 			match group:
@@ -81,7 +84,7 @@ class Body:
 		for i in range(model.nozzle_points.size()):
 			if model.nozzle_groups[i] == group:
 				torque += (model.nozzle_points[i] - model.center_of_mass).cross(model.local_force(i) * thrust_scale)
-		return torque
+		return torque * turn_scale
 
 	func turn_toward(course: float, efficiency: float) -> float:
 		var error := angle_difference(heading, course)

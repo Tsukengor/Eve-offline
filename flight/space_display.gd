@@ -41,7 +41,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		var point: Vector2 = get_global_transform_with_canvas().affine_inverse() * event.position
-		for index in range(Voyage.SYSTEMS.size()):
+		for index in range(voyage.system_count()):
 			var star := _map_point(index)
 			if Rect2(star - Vector2(57, 25), Vector2(114, 70)).has_point(point):
 				destination_selected.emit(index)
@@ -105,12 +105,14 @@ func _draw_flight_sidebar() -> void:
 	_draw_energy(417)
 	_draw_shield(436)
 	_draw_objective(466)
-	if voyage.docking_time <= 0.0 and voyage.battle_result.is_empty() and not voyage.dock_blocker().is_empty() and voyage.stage != Voyage.Stage.COMPLETE:
+	if voyage.battle_result.is_empty() and voyage.adventure != null and voyage.current_system == Voyage.Adventure.ION and voyage._inside_ion(voyage.ship_position) and not voyage.docked:
+		_text("Ионная область: потеря энергии", Vector2(816, 527), 14, AMBER)
+	elif voyage.docking_time <= 0.0 and voyage.battle_result.is_empty() and not voyage.dock_blocker().is_empty() and voyage.stage != Voyage.Stage.COMPLETE:
 		_text(voyage.dock_blocker(), Vector2(816, 527), 15, AMBER)
 
 
 func _draw_map() -> void:
-	for route: Vector3i in Voyage.ROUTES:
+	for route: Vector3i in voyage.routes():
 		var a := _map_point(route.x)
 		var b := _map_point(route.y)
 		var active := (route.x == voyage.current_system and route.y == selected
@@ -119,17 +121,24 @@ func _draw_map() -> void:
 		var label_at := (a + b) * 0.5
 		draw_rect(Rect2(label_at - Vector2(31, 12), Vector2(62, 24)), PANEL)
 		_centered("%d топл." % route.z, label_at + Vector2(0, 5), 13, ACCENT if active else MUTED)
-	for index in range(Voyage.SYSTEMS.size()):
+	for index in range(voyage.system_count()):
 		var at := _map_point(index)
 		var active := index == voyage.current_system
 		if index == selected or active:
 			draw_circle(at, 24.0, Color(PANEL, 0.94), true, -1.0, true)
 			draw_arc(at, 24.0, 0.0, TAU, 40, ACCENT if active else TEXT, 1.5, true)
-		_draw_sprite(STARS[index], at, 37)
+		var sprite_index := index % STARS.size()
+		if voyage.adventure != null and index in Voyage.Adventure.SECTOR_NOTES:
+			sprite_index = [1, 0, 2][index - Voyage.Adventure.SCRAP]
+			if not voyage.adventure.remaining(index).is_empty():
+				draw_arc(at, 22.0, 0.0, TAU, 32, Color(AMBER, 0.70), 1.0, true)
+		if voyage.adventure != null and voyage.adventure.has_destination(index):
+			draw_arc(at, 29.0, 0.0, TAU, 32, ACCENT, 1.0, true)
+		_draw_sprite(STARS[sprite_index], at, 37)
 		_centered(Voyage.SYSTEMS[index].name, at + Vector2(0, 42), 20, ACCENT if active else TEXT)
-		if active:
+		if active and voyage.adventure == null:
 			_centered("Текущая система", at + Vector2(0, 61), 13, MUTED)
-		elif index == Voyage.DISTRESS and voyage.stage == Voyage.Stage.ANSWER_DISTRESS:
+		elif voyage.adventure == null and index == Voyage.DISTRESS and voyage.stage == Voyage.Stage.ANSWER_DISTRESS:
 			_centered("Сигнал бедствия", at + Vector2(0, 61), 13, AMBER)
 
 
@@ -143,16 +152,20 @@ func _draw_map_sidebar() -> void:
 	else:
 		_text("Выберите систему", Vector2(816, 188), 22, MUTED)
 	_draw_ship_metrics(267)
-	_draw_objective(410)
+	if voyage.adventure != null and selected in Voyage.Adventure.SECTOR_NOTES:
+		_section("ОПАСНОСТЬ СЕКТОРА", 374, AMBER)
+		_wrapped(Voyage.Adventure.SECTOR_NOTES[selected], Vector2(816, 400), 248, 15)
+	else:
+		_draw_objective(410)
 	var blocker := voyage.jump_blocker(selected)
-	if selected >= 0 and not blocker.is_empty():
+	if selected >= 0 and voyage.route_cost(selected) > 0 and not blocker.is_empty():
 		_text(blocker, Vector2(816, 518), 15, AMBER)
 
 
 func _draw_ship_metrics(baseline: float) -> void:
-	var engine := minf(voyage.deck.engine_health, voyage.deck.hull.condition(voyage.deck.ENGINE))
+	var engine := minf(voyage.deck.engine_health, voyage.deck.hull.condition(voyage.deck.engine_tile))
 	var airlock := voyage.deck.airlock_progress
-	_metric("Топливо", "%d / %d" % [voyage.fuel, Voyage.FULL_FUEL], baseline, TEXT)
+	_metric("Топливо", "%d / %d" % [voyage.fuel, voyage.fuel_capacity()], baseline, TEXT)
 	_metric("Двигатель", "ЭМИ" if voyage.deck.emp_time(voyage.deck.engine_tile) > 0.0 else "%d%%" % floori(engine * 100), baseline + 31,
 		ACCENT if engine >= 1.0 else DANGER)
 	_metric("Шлюз", "Готов" if airlock >= 1.0 else "%d%%" % floori(airlock * 100),
@@ -161,7 +174,7 @@ func _draw_ship_metrics(baseline: float) -> void:
 
 func _draw_shield(y: float) -> void:
 	var field := voyage.body.shield
-	var charge := "%d / %d" % [roundi(field.charge), Voyage.Physics.Shield.CAPACITY]
+	var charge := "%d / %d" % [roundi(field.charge), roundi(field.capacity)]
 	var title := "Щит"
 	if field.emp_time > 0.0:
 		title = "Щит · ЭМИ"
@@ -185,6 +198,13 @@ func _draw_objective(baseline: float) -> void:
 		_text(voyage.battle_result, Vector2(816, baseline + 30), 18, TEXT)
 		return
 
+	if voyage.adventure != null:
+		_section("ПРИКЛЮЧЕНИЕ", baseline, ACCENT)
+		var tickets := voyage.adventure.accepted.size() - voyage.adventure.settled.size()
+		_text("Контракты  %d в работе" % tickets, Vector2(816, baseline + 27), 17)
+		_text("%d кр.  ·  %d деталей" % [voyage.adventure.credits, voyage.adventure.parts], Vector2(816, baseline + 44), 15, MUTED)
+		return
+
 	if voyage.in_training:
 		_section("ОБУЧЕНИЕ  %d / 8" % voyage.training_step, baseline, ACCENT)
 		_text("Эвакуация завершена" if voyage.stage == Voyage.Stage.COMPLETE else "Учебный рейс", Vector2(816, baseline + 28), 17)
@@ -204,6 +224,10 @@ func _draw_objective(baseline: float) -> void:
 			_text("Спасено %d человек" % voyage.delivered, Vector2(816, baseline + 32), 21, ACCENT)
 
 
+func _wrapped(value: String, at: Vector2, width: int, size: int) -> void:
+	draw_multiline_string(_font, at, value, HORIZONTAL_ALIGNMENT_LEFT, width, size, -1, MUTED)
+
+
 func _metric(label: String, value: String, y: float, tint: Color) -> void:
 	_text(label, Vector2(816, y), 16, MUTED)
 	var width := _font.get_string_size(value, HORIZONTAL_ALIGNMENT_LEFT, -1, 17).x
@@ -215,7 +239,8 @@ func _section(label: String, y: float, tint: Color = MUTED) -> void:
 
 
 func _map_point(index: int) -> Vector2:
-	return FIELD.position + Voyage.SYSTEMS[index].map
+	var point: Vector2 = Voyage.Adventure.MAP_POINTS[index] if voyage.adventure != null else Voyage.SYSTEMS[index].map
+	return FIELD.position + point
 
 
 func _draw_sprite(sprite: Texture2D, center: Vector2, longest: float, tint := Color.WHITE) -> void:

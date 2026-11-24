@@ -4,6 +4,10 @@ const Voyage = preload("res://flight/voyage_state.gd")
 const Model = preload("res://flight/ship_model.gd")
 const Physics = preload("res://flight/ship_physics.gd")
 const SHIP := preload("res://assets/flight/rescue_ship.png")
+const PLAYER_WRECK := preload("res://assets/flight/rescue_wreck.png")
+const PLAYER_DERELICT := preload("res://assets/flight/rescue_derelict.png")
+const CONTAINER := preload("res://assets/flight/salvage_container.png")
+const ION_CLOUD := preload("res://assets/flight/ion_cloud.png")
 const STATION := preload("res://assets/flight/orbital_station.png")
 const DISTRESS_STATION := preload("res://assets/flight/orbital_station_distress.png")
 const DOCK_CLAMPS := preload("res://assets/flight/docking_clamps.png")
@@ -53,6 +57,7 @@ func _draw() -> void:
 	var center := size * 0.5
 	draw_texture_rect(STARFIELD, Rect2(Vector2.ZERO, size), false)
 	_draw_grid(size)
+	_draw_environment(size)
 	if not voyage.in_arena:
 		_draw_station(size)
 	_draw_wrecks(size)
@@ -62,6 +67,10 @@ func _draw() -> void:
 		_draw_drone(drone, size)
 	_draw_projectiles(size)
 	_draw_ship()
+	if not voyage.battle_result.is_empty():
+		var dim := smoothstep(0.45, Voyage.DEFEAT_SECONDS, voyage.defeat_elapsed)
+		draw_rect(Rect2(Vector2.ZERO, size), Color(0.09, 0.028, 0.045, dim * 0.62))
+		return
 	_draw_vector(center, voyage.velocity * 0.48, VELOCITY_COLOR, "v", false)
 	_draw_vector(center, voyage.acceleration * 0.35, ACCELERATION_COLOR, "a", true)
 	if voyage.scan_enemy and is_instance_valid(voyage.enemy):
@@ -87,10 +96,31 @@ func _draw_grid(size: Vector2) -> void:
 		y += GRID_PITCH
 
 
+func _draw_environment(size: Vector2) -> void:
+	if voyage.adventure == null:
+		return
+	var available := Rect2(Vector2.ZERO, size)
+	if voyage.current_system == Voyage.Adventure.ION:
+		for cloud: Vector3 in Voyage.ION_CLOUDS:
+			var center := world_to_screen(voyage.station_position() + Vector2(cloud.x, cloud.y))
+			if available.grow(cloud.z).has_point(center):
+				_sprite(ION_CLOUD, center, cloud.z * 2.0)
+				for segment in range(18):
+					var start := TAU * segment / 18.0
+					draw_arc(center, cloud.z, start, start + 0.20, 6, Color("#4c758e"), 1.0, true)
+	for item: Voyage.Adventure.SalvageCrate in voyage.adventure.containers.get(voyage.current_system, []):
+		var point := world_to_screen(item.position)
+		if not available.grow(15.0).has_point(point):
+			continue
+		_sprite(CONTAINER, point, 27.0)
+		if voyage.salvage_contact() == item:
+			draw_arc(point, 17.0, 0.0, TAU, 24, VELOCITY_COLOR, 1.0, true)
+
+
 func _draw_station(size: Vector2) -> void:
 	var station := world_to_screen(voyage.station_position())
 	var label: String = "«%s»" % Voyage.SYSTEMS[voyage.current_system].station
-	var distress := voyage.current_system == Voyage.DISTRESS
+	var distress := voyage.adventure == null and voyage.current_system == Voyage.DISTRESS
 	var active_distress := distress and voyage.stage == Voyage.Stage.ANSWER_DISTRESS
 	var color := ACCELERATION_COLOR if active_distress else VELOCITY_COLOR
 	var visible_area := Rect2(Vector2.ZERO, size)
@@ -124,7 +154,8 @@ func _draw_enemy(enemy: Voyage.EnemyShip, size: Vector2) -> void:
 		return
 	var point := world_to_screen(enemy.position)
 	var danger := Color("#ff8c85")
-	if Rect2(Vector2.ZERO, size).grow(40.0).has_point(point):
+	var visible := Rect2(Vector2.ZERO, size)
+	if visible.grow(48.0).has_point(point):
 		_draw_thrusters(enemy.body)
 		draw_set_transform(world_to_screen(enemy.model.world_point(Vector2.ZERO, enemy.position, enemy.heading)), enemy.heading + PI * 0.5)
 		var condition := enemy.deck.hull.integrity / Voyage.DeckSimulation.Hull.HULL_MAX
@@ -139,12 +170,15 @@ func _draw_enemy(enemy: Voyage.EnemyShip, size: Vector2) -> void:
 				_sprite(MUZZLE_FLASH, mount, 19.0, Color(1, 0.7, 0.5, enemy.flash_remaining / Voyage.FLASH_SECONDS))
 		draw_set_transform(Vector2.ZERO)
 		_draw_shield(enemy.body)
+		if not visible.has_point(point):
+			_draw_station_bearing(size, point, enemy.call_sign, danger)
+			return
 		draw_rect(Rect2(point + Vector2(-24, 43), Vector2(48, 3)), Color("#30465c"))
 		draw_rect(Rect2(point + Vector2(-24, 43), Vector2(48 * condition, 3)), danger)
 		if enemy.body.shield != null:
 			draw_rect(Rect2(point + Vector2(-24, 49), Vector2(48, 2)), Color("#233b4f"))
 			var field := enemy.body.shield
-			var ratio := field.charge / Physics.Shield.CAPACITY
+			var ratio := field.charge / field.capacity
 			draw_rect(Rect2(point + Vector2(-24, 49), Vector2(48 * ratio, 2)), Color("#76ccf0") if field.active() else Color("#677d95"))
 		_centered(enemy.call_sign, point + Vector2(0, 65), danger)
 	if not Rect2(Vector2.ZERO, size).has_point(point):
@@ -170,7 +204,7 @@ func _draw_shield(body: Physics.Body) -> void:
 	var point := world_to_screen(body.position)
 	var diameter := body.shield_radius() * 2.0
 	if field.active():
-		var strength := field.charge / Physics.Shield.CAPACITY
+		var strength := field.charge / field.capacity
 		_sprite(SHIELD, point, diameter, Color(1.0, 1.0, 1.0, 0.40 + strength * 0.40))
 	if field.pulse > 0.0:
 		_sprite(SHIELD_HIT, point, diameter, Color(1.0, 1.0, 1.0, field.pulse / 0.28))
@@ -269,6 +303,9 @@ func _draw_emp_wave(projectile: Voyage.Projectile, point: Vector2) -> void:
 
 func _draw_ship() -> void:
 	var body := voyage.body
+	if not voyage.battle_result.is_empty():
+		_draw_player_defeat(body)
+		return
 	_draw_thrusters(body)
 	var healthy := voyage.deck.engine_health >= 1.0 and voyage.deck.hull.condition(voyage.deck.engine_tile) >= 1.0
 	var hull_center := world_to_screen(body.model.world_point(Vector2.ZERO, body.position, body.heading))
@@ -276,6 +313,25 @@ func _draw_ship() -> void:
 	_sprite(SHIP, Vector2.ZERO, 60, Color.WHITE if healthy else Color("#f8c599"))
 	draw_set_transform(Vector2.ZERO)
 	_draw_shield(body)
+
+
+func _draw_player_defeat(body: Physics.Body) -> void:
+	var elapsed := voyage.defeat_elapsed
+	var at := world_to_screen(body.model.world_point(Vector2.ZERO, body.position, body.heading))
+	var broken := voyage.defeat_hull
+	var ruined := PLAYER_WRECK if broken else PLAYER_DERELICT
+	draw_set_transform(at, body.heading + PI * 0.5)
+	_sprite(ruined, Vector2.ZERO, 60.0)
+	_sprite(SHIP, Vector2.ZERO, 60.0, Color(1.0, 1.0, 1.0, 1.0 - smoothstep(0.0, 0.62, elapsed)))
+	draw_set_transform(Vector2.ZERO)
+	if broken:
+		for index in range(3):
+			var time := elapsed - 0.13 - index * 0.20
+			if time >= 0.0 and time < 0.84:
+				var offset := Vector2(-9.0 + index * 8.0, 15.0 - index * 14.0).rotated(body.heading)
+				_effect_frame(WRECK_FRAMES, int(time / 0.84 * 8.0), at + offset, 95.0 + 20.0 * index)
+	elif elapsed < 0.85:
+		_effect_frame(BLACKOUT_FRAMES, int(elapsed / 0.85 * 4.0), at, 83.0)
 
 
 func _draw_thrusters(body: Physics.Body) -> void:

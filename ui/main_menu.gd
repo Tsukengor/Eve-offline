@@ -60,6 +60,7 @@ func _new_panel(page: String, title: String, width := 385.0) -> void:
 func _show_main() -> void:
 	_new_panel("main", "Eve Offline")
 	_menu_button(_panel, "Кампания", _show_campaign)
+	_menu_button(_panel, "Приключение", _show_adventure)
 	_menu_button(_panel, "Обучение", _start.bind(Run.Session.TRAINING))
 	_menu_button(_panel, "Полигон", _start.bind(Run.Session.ARENA))
 	_menu_button(_panel, "Настройки", _show_settings)
@@ -70,6 +71,23 @@ func _show_campaign() -> void:
 	_new_panel("campaign", "Кампания", 480.0)
 	_menu_button(_panel, "Спасение станции «Каскад»", _start.bind(Run.Session.CAMPAIGN))
 	_menu_button(_panel, "Назад", _show_main)
+
+
+func _show_adventure() -> void:
+	_new_panel("adventure", "Приключение", 460.0)
+	var saved := FileAccess.file_exists(Run.Voyage.Adventure.SAVE_PATH)
+	var resume := _menu_button(_panel, "Продолжить", _start.bind(Run.Session.ADVENTURE, true))
+	resume.disabled = not saved
+	var begin := _confirm_new_adventure if saved else _start.bind(Run.Session.ADVENTURE)
+	_menu_button(_panel, "Новый рейс", begin)
+	_menu_button(_panel, "Назад", _show_main)
+
+
+func _confirm_new_adventure() -> void:
+	_new_panel("adventure_reset", "Новый рейс", 490.0)
+	_panel.add_child(_text("Новый рейс заменит сохранение приключения.", 17, DIM))
+	_menu_button(_panel, "Начать новый рейс", _start.bind(Run.Session.ADVENTURE))
+	_menu_button(_panel, "Назад", _show_adventure)
 
 
 func _show_settings() -> void:
@@ -157,9 +175,10 @@ func _input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 
 
-func _start(session: Run.Session) -> void:
+func _start(session: Run.Session, resume := false) -> void:
 	var game: Run = RUN.instantiate()
 	game.session = session
+	game.continue_adventure = resume
 	get_tree().root.add_child(game)
 	get_tree().current_scene = game
 	queue_free()

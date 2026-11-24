@@ -29,6 +29,7 @@ var heading: float:
 	set(value): body.heading = value
 var _crew_interval := 0.0
 var shot_requested := false
+var encounter_slot := -1
 var conserving_power := false
 var weapons_cooldown := 0.0
 var flash_remaining := 0.0

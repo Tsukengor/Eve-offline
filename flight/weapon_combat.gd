@@ -292,10 +292,10 @@ static func _rail(shot: Projectile, delta: float, targets: Array[Target], statio
 	for crossing in crossings:
 		var target: Target = crossing.target
 		if crossing.get("field", false):
-			if target.body.shield.charge >= Physics.Shield.CAPACITY * 0.5:
+			if target.body.shield.charge >= target.body.shield.capacity * 0.5:
 				target.absorb(shot.damage)
 				return false
-			target.absorb(Physics.Shield.CAPACITY)
+			target.absorb(target.body.shield.capacity)
 			continue
 		var visited := shot.penetrated[target.body]
 		var room: int = target.deck.hull.room_at[crossing.tile] if target.deck != null else 0

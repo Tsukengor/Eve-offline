@@ -5,6 +5,7 @@ const RECHARGE_DELAY := 4.0
 const RECHARGE_RATE := 20.0
 const EMP_DURATION := 3.0
 
+var capacity := CAPACITY
 var charge := CAPACITY
 var delay := 0.0
 var emp_time := 0.0
@@ -18,7 +19,7 @@ func active() -> bool:
 
 
 func reset() -> void:
-	charge = CAPACITY
+	charge = capacity
 	delay = 0.0
 	emp_time = 0.0
 	collapsed = false
@@ -27,14 +28,14 @@ func reset() -> void:
 
 func advance(delta: float, staffed := true) -> bool:
 	var elapsed := maxf(delay, emp_time)
-	var updated := online != staffed or elapsed > 0.0 or pulse > 0.0 or (staffed and charge < CAPACITY)
+	var updated := online != staffed or elapsed > 0.0 or pulse > 0.0 or (staffed and charge < capacity)
 	online = staffed
 	delay = move_toward(delay, 0.0, delta)
 	emp_time = move_toward(emp_time, 0.0, delta)
 	pulse = move_toward(pulse, 0.0, delta)
 	if online:
-		charge = minf(CAPACITY, charge + maxf(0.0, delta - elapsed) * RECHARGE_RATE)
-	if charge == CAPACITY:
+		charge = minf(capacity, charge + maxf(0.0, delta - elapsed) * RECHARGE_RATE)
+	if charge == capacity:
 		collapsed = false
 	return updated
 
@@ -47,5 +48,5 @@ func absorb(amount: float) -> void:
 
 
 func suppress() -> void:
-	absorb(CAPACITY)
+	absorb(capacity)
 	emp_time = EMP_DURATION

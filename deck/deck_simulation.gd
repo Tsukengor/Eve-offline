@@ -114,9 +114,12 @@ var simulation_speed := 1.0
 var module_cells: Array = MODULE_CELLS
 var crew: Array[CrewMember] = []
 var passengers: Array[Passenger] = []
+var freight_count := 0
 var cargo_seats: Array[Vector2i] = []
 var doors: Dictionary[Vector4i, Door] = {}
 var engine_health := 0.0
+var reactor_multiplier := 1.0
+var upgrade_levels := {}
 var airlock_progress := 0.0
 var notice := ""
 var training_hint := ""
@@ -236,6 +239,8 @@ func reset(for_flight := false) -> void:
 	crew[GUNNER_INDEX].order = Order.POST
 	_transits.clear()
 	passengers.clear()
+	freight_count = 0
+	upgrade_levels.clear()
 	_find_cargo_seats()
 	for edge in doors:
 		_update_edge(edge, true)
@@ -254,6 +259,28 @@ func reset(for_flight := false) -> void:
 	engine_health = 1.0 if for_flight else 0.0
 	airlock_progress = 0.0
 	notice = "" if for_flight else "Двигатель отключён. Назначьте ремонт."
+	changed.emit()
+
+
+func service_at_station() -> void:
+	hull.integrity = Hull.HULL_MAX
+	hull.breaches.clear()
+	for room in hull.rooms:
+		room.integrity = Hull.ROOM_MAX
+		room.oxygen = 1.0
+	engine_health = 1.0
+	power.energy = ShipPower.CAPACITY
+	emp_timers.clear()
+	emp_recovery_time = 0.0
+	_emp_recovery_loss = 0.0
+	for member in crew:
+		if member.health > 0.0:
+			member.health = 100.0
+		if member.order in [Order.SEAL, Order.REPAIR, Order.REPAIR_ROOM]:
+			member.order = Order.IDLE
+			member.target = INVALID_CELL
+			member.route.clear()
+			member.blocked = false
 	changed.emit()
 
 
@@ -921,7 +948,7 @@ func _physics_process(delta: float) -> void:
 func energy_recovery_rate() -> float:
 	if not module_online(reactor_tile):
 		return 0.0
-	var rate := ShipPower.RECHARGE * hull.condition(reactor_tile) * (1.0 - _emp_recovery_loss)
+	var rate := ShipPower.RECHARGE * reactor_multiplier * hull.condition(reactor_tile) * (1.0 - _emp_recovery_loss)
 	return rate * ShipPower.OPERATOR_BONUS if operator_at(WorkPose.REACTOR) != null else rate
 
 

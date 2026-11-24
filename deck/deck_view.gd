@@ -15,6 +15,8 @@ const WALK_FRAMES := preload("res://assets/deck/crew_walk.png")
 const REPAIR_FRAMES := preload("res://assets/deck/crew_repair.png")
 const CARGO_SEAT := preload("res://assets/deck/cargo_seat.png")
 const PASSENGER := preload("res://assets/deck/passenger.png")
+const UPGRADE_PLATE := preload("res://assets/deck/upgrade_plate.png")
+const FREIGHT := preload("res://assets/flight/salvage_container.png")
 const REPAIR_SOUND := preload("res://assets/audio/repair_tools.wav")
 const HELM_SPRITES := [
 	preload("res://assets/deck/pilot_helm.png"),
@@ -386,12 +388,20 @@ func _draw_deck() -> void:
 		_draw_module(simulation.shield_tile, SHIELD_CONSOLE, ACCENT if manned else MUTED)
 		if simulation.layout_path == DeckSimulation.RESCUE_LAYOUT:
 			_room_label("ЩИТ", Vector2i(1, 6))
+	var modules := {"thrusters": simulation.engine_tile, "reactor": simulation.reactor_tile, "shield": simulation.shield_tile}
+	for key in simulation.upgrade_levels:
+		var at := _cell_center(modules[key]) + Vector2(-9.0, 11.0) * _deck_cell / CELL
+		for level in simulation.upgrade_levels[key]:
+			_draw_sprite(UPGRADE_PLATE, at + Vector2(level * 9.0, 0) * _deck_cell / CELL, 8.0)
+
 	for tile in simulation.hull.breaches:
 		_draw_sprite(BREACH_SPRITE, _cell_center(tile), 27.0)
 		_draw_sprite(AIR_LEAK, _cell_center(tile) + Vector2(3, -9) * _deck_cell / CELL, 21.0, Color(1, 1, 1, 0.65))
 
 	for tile in simulation.cargo_seats:
 		_draw_sprite(CARGO_SEAT, _cell_center(tile), 23.0)
+	for index in mini(simulation.freight_count, simulation.cargo_seats.size()):
+		_draw_sprite(FREIGHT, _cell_center(simulation.cargo_seats[index]), 23.0)
 	for passenger in simulation.passengers:
 		_draw_passenger(passenger)
 

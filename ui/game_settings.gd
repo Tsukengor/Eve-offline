@@ -3,14 +3,14 @@ extends Node
 const FILE := "user://settings.cfg"
 const DEFAULTS := {
 	"flight_turn_left": KEY_A, "flight_turn_right": KEY_D, "flight_thrust": KEY_W,
-	"flight_brake": KEY_SHIFT, "flight_stabilize": KEY_Q, "flight_fire": KEY_F,
+	"flight_brake": KEY_SHIFT, "flight_stabilize": KEY_Q, "flight_fire": KEY_F, "cycle_weapon": KEY_X,
 	"slow_time": KEY_T, "toggle_deck": KEY_TAB, "toggle_map": KEY_M, "tactical_pause": KEY_SPACE,
 	"dock_ship": KEY_E, "confirm_jump": KEY_ENTER, "crew_1": KEY_1, "crew_2": KEY_2,
 	"crew_3": KEY_3, "crew_4": KEY_4, "order_modifier": KEY_SHIFT,
 }
 const LABELS := {
 	"flight_turn_left": "Поворот влево", "flight_turn_right": "Поворот вправо", "flight_thrust": "Маршевая тяга",
-	"flight_brake": "Торможение", "flight_stabilize": "Стабилизация", "flight_fire": "Огонь",
+	"flight_brake": "Торможение", "flight_stabilize": "Стабилизация", "flight_fire": "Огонь", "cycle_weapon": "Смена орудия",
 	"slow_time": "Замедлить время", "toggle_deck": "Полёт / палуба", "toggle_map": "Карта",
 	"tactical_pause": "Тактическая пауза", "dock_ship": "Стыковка", "confirm_jump": "Подтвердить прыжок",
 	"crew_1": "Выбрать пилота", "crew_2": "Выбрать инженера", "crew_3": "Выбрать спасателя", "crew_4": "Выбрать наводчика",
@@ -36,6 +36,12 @@ func load_settings(path := FILE) -> void:
 		var value: Variant = config.get_value("keyboard", action, candidate[action])
 		if value is int and value != KEY_ESCAPE and value > 0 and not OS.get_keycode_string(value).is_empty():
 			candidate[action] = value
+	if not config.has_section_key("keyboard", "cycle_weapon"):
+		for key in [KEY_X, KEY_C, KEY_V, KEY_B, KEY_G, KEY_Y, KEY_U, KEY_I, KEY_O, KEY_P,
+				KEY_H, KEY_J, KEY_K, KEY_L, KEY_Z, KEY_N, KEY_5, KEY_6, KEY_7]:
+			if _conflict(candidate, "cycle_weapon", key).is_empty():
+				candidate["cycle_weapon"] = key
+				break
 	var valid := true
 	for action in candidate:
 		if not _conflict(candidate, action, candidate[action]).is_empty():

@@ -120,6 +120,7 @@ func _test_voyage() -> void:
 		and _voyage.delivered == 0 and not _voyage.incident_seen, "Reset clears all voyage and deck state")
 	await _test_unbounded_flight_and_weapon()
 	await _test_menu_and_training()
+	await _test_adventure()
 	if _failures == 0:
 		print("Voyage regression checks passed.")
 	quit(_failures)
@@ -145,7 +146,7 @@ func _test_menu_and_training() -> void:
 	var menu = load(ProjectSettings.get_setting("application/run/main_scene")).instantiate()
 	root.add_child(menu)
 	current_scene = menu
-	_check(menu._panel.get_child_count() == 6, "The entry scene offers five menu actions")
+	_check(menu._panel.get_child_count() == 7, "The entry scene offers six menu actions")
 	menu._show_campaign()
 	_check(menu._panel.get_child(1).text.contains("Каскад"), "The campaign lists the existing rescue mission")
 	menu._show_settings()
@@ -190,6 +191,88 @@ func _test_menu_and_training() -> void:
 		"Returning from a run restores the main menu")
 
 
+func _test_adventure() -> void:
+	var menu := current_scene
+	var save_path := "user://adventure-regression.cfg"
+	var run := SCENE.instantiate() as Run
+	run.session = Run.Session.ADVENTURE
+	run.adventure_save_path = save_path
+	root.add_child(run)
+	current_scene = run
+	menu.queue_free()
+	_run = run
+	_voyage = run.voyage
+	var voyage := _voyage
+	_check(voyage.adventure != null and voyage.docked and voyage.system_count() == 6
+		and FileAccess.file_exists(save_path), "Adventure has its own sector and initial station checkpoint")
+	_run._open_journal()
+	_check(paused and _run._adventure_panel.visible, "The station workshop opens and preserves the tactical view")
+	_run._close_journal()
+	_check(not paused and not _run._adventure_panel.visible, "Closing the workshop restores time")
+	_check(voyage.accept_contract(0) and voyage.accept_contract(3) and voyage.deck.freight_count == 1,
+		"The starter station offers a delivery and a combat contract")
+	_check(not voyage.accept_contract(0), "The same contract cannot be accepted twice")
+	_key(KEY_X)
+	_check(voyage.weapon.kind == Voyage.WeaponProfile.Kind.LASER, "The remappable action selects the second installed weapon")
+	_check(voyage.jump(Voyage.DISTRESS) and voyage.enemies.is_empty() and voyage.deck.engine_health == 1.0,
+		"Adventure traffic does not trigger the scripted campaign incident")
+	_check(voyage.jump(Voyage.REFUGE), "The delivery destination is reachable along the existing lanes")
+	voyage._moor_at_checkpoint()
+	voyage._arrive_at_adventure_station()
+	_check(0 in voyage.adventure.settled and voyage.adventure.credits == 162 and voyage.deck.freight_count == 0,
+		"Docking hands over freight and pays the delivery once")
+	voyage._arrive_at_adventure_station()
+	_check(voyage.adventure.credits == 162, "Docking again does not pay twice")
+	_check(voyage.purchase_weapon(2) and voyage.mount_weapon(1, 2) and voyage.adventure.slots == [0, 2],
+		"New equipment can be purchased and installed at a station")
+	_check(voyage.jump(Voyage.Adventure.SCRAP) and voyage.enemies.size() == 2 and voyage.wrecks.size() == 4,
+		"The wreck field contains the ambush and physical debris")
+	for hostile in voyage.enemies:
+		hostile.deck.apply_hit(Voyage.DeckSimulation.Hull.HULL_MAX, 0.0)
+	voyage._advance_battle(TICK)
+	var loot: Array = voyage.adventure.containers[Voyage.Adventure.SCRAP]
+	_check(voyage.enemies.is_empty() and loot.size() == 2 and voyage.adventure.credits == 52,
+		"Victory drops containers instead of immediately paying salvage")
+	if not loot.is_empty():
+		voyage.ship_position = loot[0].position
+		voyage.velocity = Vector2(95, 0)
+		_key(KEY_E)
+		_check(loot.size() == 2, "Too much speed blocks salvage pickup")
+		voyage.velocity = Vector2.ZERO
+		_key(KEY_E)
+		_check(loot.size() == 1 and voyage.adventure.credits > 52,
+			"Interaction collects exactly one nearby container")
+	voyage._moor_at_checkpoint()
+	voyage._arrive_at_adventure_station()
+	_check(3 in voyage.adventure.settled and voyage.refit("shield") and voyage.body.shield.capacity == 125.0,
+		"The combat payout funds a shield capacity upgrade")
+	_check(voyage.refit("thrusters") and voyage.body.turn_scale > Voyage.PLAYER_TURN_SCALE,
+		"Thruster upgrades affect the player's angular acceleration")
+	_check(voyage.jump(Voyage.REFUGE) and voyage.jump(Voyage.Adventure.ION),
+		"The ion sector is reachable by jumping")
+	var cloud: Vector3 = Voyage.ION_CLOUDS[0]
+	voyage.ship_position = voyage.station_position() + Vector2(cloud.x, cloud.y)
+	var reserve := voyage.deck.power.energy
+	voyage._apply_ion_hazards(1.0)
+	_check(is_equal_approx(reserve - voyage.deck.power.energy, 13.0),
+		"Flying into an ion cloud drains the ship's energy")
+	voyage.deck.apply_hit(Voyage.DeckSimulation.Hull.HULL_MAX, 0.0)
+	_tick(1)
+	_check(voyage.defeat_hull and not _run._defeat_panel.visible, "Hull loss starts the defeat animation before showing the dialog")
+	_tick(150)
+	_check(_run._defeat_panel.visible and _run._defeat_retry.text == "С сохранения",
+		"Defeat finishes with a checkpoint recovery action")
+	_run._reset()
+	_check(voyage.current_system == Voyage.Adventure.SCRAP and voyage.docked and voyage.enemies.is_empty()
+		and voyage.adventure.slots == [0, 2] and voyage.body.shield.capacity == 125.0
+		and voyage.adventure.containers[Voyage.Adventure.SCRAP].size() == 1 and voyage.battle_result.is_empty(),
+		"Recovery restores location, upgrades, contracts, loot and the defeated encounter set")
+	DirAccess.remove_absolute(save_path)
+	_run._return_to_menu()
+	await process_frame
+	await process_frame
+
+
 func _train_until_next(action: String, limit: int) -> void:
 	var step := _run._training.step
 	if not action.is_empty():
@@ -206,6 +289,10 @@ func _train_until_next(action: String, limit: int) -> void:
 func _test_ship_physics() -> void:
 	var ship := Physics.Body.new()
 	ship.model = _voyage.body.model
+	var turn_group := Voyage.Physics.Model.Group.TURN_RIGHT
+	_check(is_equal_approx(_voyage.body._group_torque(turn_group), ship._group_torque(turn_group) * 1.5)
+		and is_equal_approx(_voyage.body.passive_angular_deceleration, 0.24),
+		"The player's turn and stabilization nozzles and passive damping are strengthened")
 	ship.advance(TICK, 0.0, 1.0, 0.0, false)
 	var spin := ship.spin
 	var heading := ship.heading
