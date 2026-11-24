@@ -4,8 +4,12 @@ const Voyage = preload("res://flight/voyage_state.gd")
 const Model = preload("res://flight/ship_model.gd")
 const Physics = preload("res://flight/ship_physics.gd")
 const SHIP := preload("res://assets/flight/rescue_ship.png")
-const STATION := preload("res://assets/flight/station.png")
-const DISTRESS_STATION := preload("res://assets/flight/station_distress.png")
+const STATION := preload("res://assets/flight/orbital_station.png")
+const DISTRESS_STATION := preload("res://assets/flight/orbital_station_distress.png")
+const DOCK_CLAMPS := preload("res://assets/flight/docking_clamps.png")
+const HIT_FRAMES := preload("res://assets/flight/impact_frames.png")
+const WRECK_FRAMES := preload("res://assets/flight/ship_explosion_frames.png")
+const BLACKOUT_FRAMES := preload("res://assets/flight/crew_blackout_frames.png")
 const EXHAUST := preload("res://assets/flight/thruster.png")
 const MANEUVER_EXHAUST := preload("res://assets/flight/maneuver_thruster.png")
 const MUZZLE_FLASH := preload("res://assets/flight/muzzle_flash.png")
@@ -24,6 +28,7 @@ const STARFIELD := preload("res://assets/flight/starfield.png")
 const SCAN_FLOORS := {
 	"B": Color("#36526b"), "E": Color("#3c4a5d"), "S": Color("#365450"),
 	"C": Color("#243447"), "W": Color("#583c51"), "L": Color("#34566a"), "R": Color("#554b3c"),
+	"G": Color("#505244"),
 }
 
 const GRID_PITCH := 84.0
@@ -49,6 +54,7 @@ func _draw() -> void:
 	_draw_grid(size)
 	if not voyage.in_arena:
 		_draw_station(size)
+	_draw_wrecks(size)
 	for hostile in voyage.enemies:
 		_draw_enemy(hostile, size)
 	_draw_projectiles(size)
@@ -86,12 +92,24 @@ func _draw_station(size: Vector2) -> void:
 	var color := ACCELERATION_COLOR if active_distress else VELOCITY_COLOR
 	var visible_area := Rect2(Vector2.ZERO, size)
 	if visible_area.grow(Voyage.DOCK_RANGE).has_point(station):
-		var ring := Color(color, 0.56 if voyage.distance_to_station() < 220.0 else 0.24)
+		var ring := Color(color, 0.56 if voyage.distance_to_station() < 255.0 else 0.24)
 		for segment in range(16):
 			var start := TAU * segment / 16.0
 			draw_arc(station, Voyage.DOCK_RANGE, start, start + TAU * 0.57 / 16.0, 6, ring, 1.0, true)
-		_sprite(DISTRESS_STATION if distress else STATION, station, 112)
-		var label_position := station + Vector2(0, 76)
+		var rotation := voyage.station_body.heading + PI * 0.5
+		draw_set_transform(station, rotation)
+		_sprite(DISTRESS_STATION if distress else STATION, Vector2.ZERO, Voyage.STATION_SIZE)
+		draw_set_transform(Vector2.ZERO)
+		if voyage.docking_time > 0.0 or voyage.docked:
+			var angle := voyage.dock_angle + rotation
+			var clamp_position := station + Vector2.from_angle(angle) * (Voyage.STATION_SIZE * 0.5 + 2.0)
+			draw_set_transform(clamp_position, angle)
+			var sprite_frame := 1 if voyage.docked else 0
+			var glow := 1.0 if voyage.docked else 0.7 + 0.3 * sin(voyage.docking_time * 15.0)
+			draw_texture_rect_region(DOCK_CLAMPS, Rect2(-12, -12, 24, 24), Rect2(sprite_frame * 24, 0, 24, 24),
+				Color(1.0, 1.0, 1.0, glow))
+			draw_set_transform(Vector2.ZERO)
+		var label_position := station + Vector2(0, Voyage.STATION_SIZE * 0.5 + 23.0)
 		if visible_area.has_point(station) and visible_area.grow(-34.0).has_point(label_position):
 			_centered(label, label_position, color)
 	if not visible_area.has_point(station):
@@ -107,7 +125,12 @@ func _draw_enemy(enemy: Voyage.EnemyShip, size: Vector2) -> void:
 		_draw_thrusters(enemy.body)
 		draw_set_transform(world_to_screen(enemy.model.world_point(Vector2.ZERO, enemy.position, enemy.heading)), enemy.heading + PI * 0.5)
 		var condition := enemy.deck.hull.integrity / Voyage.DeckSimulation.Hull.HULL_MAX
-		_sprite(enemy.sprite, Vector2.ZERO, enemy.sprite_size, Color.WHITE.lerp(danger, (1.0 - condition) * 0.55))
+		var damaged := Color.WHITE.lerp(danger, (1.0 - condition) * 0.55)
+		var flash := enemy.hit_remaining / Voyage.EnemyShip.HIT_SECONDS
+		_sprite(enemy.sprite, Vector2.ZERO, enemy.sprite_size, damaged.lerp(Color("#fff4d5"), flash * 0.65))
+		if enemy.hit_remaining > 0.0:
+			var index := mini(4, int((1.0 - flash) * 5.0))
+			_effect_frame(HIT_FRAMES, index, enemy.hit_side * enemy.sprite_size * 0.35, 34.0)
 		if enemy.flash_remaining > 0.0 and enemy.weapon != null:
 			for mount in enemy.weapon.mounts:
 				_sprite(MUZZLE_FLASH, mount, 19.0, Color(1, 0.7, 0.5, enemy.flash_remaining / Voyage.FLASH_SECONDS))
@@ -117,6 +140,26 @@ func _draw_enemy(enemy: Voyage.EnemyShip, size: Vector2) -> void:
 		_centered(enemy.call_sign, point + Vector2(0, 64), danger)
 	if not Rect2(Vector2.ZERO, size).has_point(point):
 		_draw_station_bearing(size, point, enemy.call_sign, danger)
+
+
+func _draw_wrecks(size: Vector2) -> void:
+	var visible := Rect2(Vector2.ZERO, size).grow(105.0)
+	for wreck in voyage.wrecks:
+		var at := world_to_screen(wreck.position)
+		if not visible.has_point(at):
+			continue
+		draw_set_transform(at, wreck.rotation)
+		_sprite(wreck.texture, Vector2.ZERO, wreck.size)
+		draw_set_transform(Vector2.ZERO)
+		if wreck.broken_hull and wreck.age < 0.84:
+			_effect_frame(WRECK_FRAMES, int(wreck.age * 8.0 / 0.84), at, wreck.size * 2.1)
+		elif not wreck.broken_hull and wreck.age < 0.62:
+			_effect_frame(BLACKOUT_FRAMES, int(wreck.age * 4.0 / 0.62), at, wreck.size)
+
+
+func _effect_frame(atlas: Texture2D, index: int, point: Vector2, extent: float) -> void:
+	var side := Vector2.ONE * extent
+	draw_texture_rect_region(atlas, Rect2(point - side * 0.5, side), Rect2(index * 64, 0, 64, 64))
 
 
 func _draw_station_bearing(size: Vector2, station: Vector2, label: String, color: Color) -> void:

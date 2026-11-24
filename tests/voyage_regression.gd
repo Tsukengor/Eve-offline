@@ -64,11 +64,31 @@ func _test_voyage() -> void:
 	_check(_voyage.deck.engine_health == 1.0 and _voyage.deck.airlock_progress == 1.0,
 		"Deck orders complete while the flight view is visible")
 	_key(KEY_E)
+	_check(_voyage.docking_time > 0.0 and not _voyage.docked and _voyage.survivors_onboard == 0,
+		"Manual approach hands off to a timed capture before boarding")
+	var capture_start := _voyage.ship_position
+	_tick(40)
+	_check(_voyage.docking_time > 0.0 and _voyage.ship_position.distance_to(capture_start) > 1.0 and not _voyage.fire(),
+		"Capture visibly moves the ship and locks its weapons")
+	_tick(80)
 	_check(_voyage.docked and _voyage.stage == Voyage.Stage.DELIVER_SURVIVORS
 		and _voyage.survivors_onboard == 8, "Docking at Cascade picks up eight survivors")
+	_check(_voyage.deck.passengers.size() == 8 and _voyage.deck.passengers.all(
+		func(passenger: Voyage.DeckSimulation.Passenger) -> bool: return _voyage.deck.tile_kind(passenger.cell) == "S"),
+		"Passengers first come aboard through the airlock")
+	var docked_angle := _voyage.station_body.heading
+	var docked_position := _voyage.ship_position
+	_tick(420)
+	_check(docked_angle != _voyage.station_body.heading and docked_position != _voyage.ship_position
+		and is_equal_approx(_voyage.distance_to_station(), Voyage.DOCK_RADIUS),
+		"The moored ship shares the station's rotation")
+	_check(_voyage.deck.passengers.all(func(passenger: Voyage.DeckSimulation.Passenger) -> bool:
+		return passenger.cell == passenger.seat and _voyage.deck.tile_kind(passenger.cell) == "G"),
+		"Passengers walk through the door and occupy their cargo seats")
 	_check(not _voyage.fire(), "A docked ship cannot fire")
 	_key(KEY_E)
 	_key(KEY_E)
+	_tick(110)
 	_check(_voyage.survivors_onboard == 8, "Repeated docking does not board the same passengers twice")
 
 	_check(_voyage.jump_blocker(Voyage.HOME).is_empty(), "Home is a valid evacuation destination")
@@ -85,8 +105,10 @@ func _test_voyage() -> void:
 	_key(KEY_ESCAPE)
 	_approach_station()
 	_key(KEY_E)
+	_tick(110)
 	_check(_voyage.stage == Voyage.Stage.COMPLETE and _voyage.delivered == 8 and _voyage.survivors_onboard == 0,
 		"Delivering at the safe station completes the scenario")
+	_check(_voyage.deck.passengers.is_empty(), "Evacuees leave the cargo seats upon delivery")
 	_check(_voyage.fuel == Voyage.FULL_FUEL, "The safe station refuels the ship")
 	_key(KEY_E)
 	_check(_voyage.delivered == 8 and _voyage.docked, "The completed report survives another docking input")
@@ -153,10 +175,11 @@ func _test_menu_and_training() -> void:
 		_train_until_next("", 420)
 		_check(training.step == Run.Training.Step.APPROACH, "Preparing the airlock enables the approach")
 		_key(KEY_TAB)
-		_voyage.ship_position = _voyage.station_position() + Vector2(-94, 0)
+		_voyage.ship_position = _voyage.station_position() + Vector2(-(Voyage.DOCK_RANGE - 7.0), 0)
 		_voyage.velocity = Vector2.ZERO
 		training.advance(false)
 		_key(KEY_E)
+		_tick(110)
 		training.advance(false)
 		_check(training.step == Run.Training.Step.COMPLETE and _voyage.delivered == 8,
 			"Docking after the training objectives completes evacuation")
@@ -205,7 +228,7 @@ func _test_ship_physics() -> void:
 	var station := Physics.Body.new()
 	station.model = _voyage.station_body.model
 	station.fixed = true
-	ship.position = Vector2(-54, 24)
+	ship.position = Vector2(-130, 24)
 	ship.velocity = Vector2(120, 0)
 	var hit := Physics.contact(ship, station)
 	_check(hit != null, "A hull corner overlaps the station")
@@ -214,6 +237,14 @@ func _test_ship_physics() -> void:
 		_check(not is_zero_approx(ship.spin) and hit.closing_speed > 0.0 and station.position == Vector2.ZERO,
 			"An off-center impact spins the hull around its mass center")
 		_check(Physics.contact(ship, station) == null, "The contact solver separates the two polygons")
+
+	var charge := _voyage.deck.power.energy
+	_voyage.deck.power.energy = 0.0
+	_voyage.angular_velocity = -0.08
+	_voyage.advance_flight(0.6, 0.0, false, false)
+	_check(is_zero_approx(_voyage.angular_velocity) and is_zero_approx(_voyage.deck.power.energy),
+		"The player hull passively stops spinning without power or overshoot")
+	_voyage.deck.power.energy = charge
 
 
 func _test_slow_time() -> void:
@@ -373,17 +404,17 @@ func _approach_station() -> void:
 	_check(_voyage.distance_to_station() < Voyage.DOCK_RANGE, "The ship reaches the docking zone under thrust")
 	_key(KEY_E)
 	_check(not _voyage.docked and _voyage.dock_blocker().contains("скорость"), "Docking rejects a fast approach")
-	_brake()
+	_brake(5.0)
 	_check(_voyage.velocity.length() <= Voyage.DOCK_SPEED
 		and Voyage.Physics.contact(_voyage.body, _voyage.station_body) == null,
 		"Braking and station contact stop the ship outside the station")
 
 
-func _brake() -> void:
+func _brake(tolerance := 0.001) -> void:
 	Input.action_press("flight_brake")
 	_tick(300)
 	Input.action_release("flight_brake")
-	_check(_voyage.velocity.is_zero_approx(), "Active braking stops the ship")
+	_check(_voyage.velocity.length() < tolerance, "Active braking stops the ship within tolerance")
 
 
 func _tick(count: int) -> void:

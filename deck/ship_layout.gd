@@ -29,7 +29,7 @@ static func decode(data: Variant) -> Dictionary:
 			return {"error": "Строки палубы должны быть одной длины."}
 		for x in range(width):
 			var kind: String = rows[y][x]
-			if not ".CBESWLR".contains(kind):
+			if not ".CBESWLRG".contains(kind):
 				return {"error": "Неизвестный тип клетки."}
 			if kind != ".":
 				floors[Vector2i(x, y)] = kind

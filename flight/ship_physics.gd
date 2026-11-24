@@ -14,6 +14,7 @@ class Body:
 	var velocity := Vector2.ZERO
 	var heading := 0.0
 	var spin := 0.0
+	var passive_angular_deceleration := 0.0
 	var fixed := false
 	var mass_scale := 1.0
 	var thrust_scale := 1.0
@@ -68,7 +69,8 @@ class Body:
 			for index in active:
 				active[index] *= supply
 		velocity += forces.rotated(frame) * delta * inverse_mass() * supply
-		spin += torque * delta * inverse_moment() * supply
+		spin = move_toward(spin + torque * delta * inverse_moment() * supply, 0.0,
+			passive_angular_deceleration * delta)
 		heading = wrapf(heading + spin * delta, -PI, PI)
 		return supply
 

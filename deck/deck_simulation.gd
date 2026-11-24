@@ -2,6 +2,7 @@ extends Node
 
 signal changed
 signal damage_alert(tile: Vector2i, breach: bool, message: String)
+signal hit_received(side: Vector2)
 
 enum Order { IDLE, MOVE, POST, REPAIR, PREPARE, SEAL, REPAIR_ROOM }
 
@@ -63,6 +64,8 @@ class CrewMember:
 	var order := Order.IDLE
 	var blocked := false
 	var health := 100.0
+	var gait := 0.0
+	var repair_phase := 0.0
 
 	func _init(member_name: String, member_role: String, tint: Color, start: Vector2i) -> void:
 		title = member_name
@@ -83,6 +86,16 @@ class Transit:
 	var distance := 0.0
 
 
+class Passenger:
+	var cell: Vector2i
+	var seat: Vector2i
+	var route: Array[Vector2i] = []
+	var crossing := 0.0
+	var position: Vector2
+	var boarding_delay := 0.0
+	var gait := 0.0
+
+
 var plan: Array = []
 @export_file("*.json") var layout_path := RESCUE_LAYOUT
 var layout_name := ""
@@ -99,6 +112,8 @@ var power := ShipPower.new()
 var simulation_speed := 1.0
 var module_cells: Array = MODULE_CELLS
 var crew: Array[CrewMember] = []
+var passengers: Array[Passenger] = []
+var cargo_seats: Array[Vector2i] = []
 var doors: Dictionary[Vector4i, Door] = {}
 var engine_health := 0.0
 var airlock_progress := 0.0
@@ -218,6 +233,8 @@ func reset(for_flight := false) -> void:
 	crew[GUNNER_INDEX].target = weapons_tile
 	crew[GUNNER_INDEX].order = Order.POST
 	_transits.clear()
+	passengers.clear()
+	_find_cargo_seats()
 	for edge in doors:
 		_update_edge(edge, true)
 		doors[edge] = Door.new(false)
@@ -282,6 +299,7 @@ func apply_emp(drain: float, duration: float, count: int, side: Vector2, recover
 	if not damage_enabled or disabled():
 		return
 	power.spend(minf(power.energy, drain))
+	hit_received.emit(side)
 	if recovery_loss > 0.0:
 		emp_recovery_time = 10.0
 		_emp_recovery_loss = maxf(_emp_recovery_loss, recovery_loss)
@@ -333,6 +351,8 @@ func apply_hit(damage: float, breach_chance: float, crew_damage := 0.0,
 			occupied.append(member.landing)
 	for transit in _transits:
 		occupied.append_array(transit.cells)
+	for passenger in passengers:
+		occupied.append(Vector2i(passenger.position.round()))
 	var leaks_before := hull.breaches.size()
 	hull.strike(tile, damage, clampf(breach_chance, 0.0, 1.0), occupied, _rng)
 	var lost := false
@@ -343,12 +363,13 @@ func apply_hit(damage: float, breach_chance: float, crew_damage := 0.0,
 				lost = _hurt_crew(member, crew_damage) or lost
 		if lost:
 			_replan_waiting_orders()
+	hit_received.emit(impact_side)
 	var breached := hull.breaches.size() > leaks_before
 	if not announce and not breached:
 		changed.emit()
 		return tile
 	var room_name: String = {"B": "мостик", "E": "двигатели", "W": "вооружение",
-		"L": "кислородная установка", "S": "шлюз", "C": "коридор", "R": "реактор"}[tile_kind(tile)]
+		"L": "кислородная установка", "S": "шлюз", "C": "коридор", "R": "реактор", "G": "грузовой отсек"}[tile_kind(tile)]
 	notice = ("%s — %s" % ["Пробоина" if breached else "Повреждение", room_name.capitalize()])
 	_report_damage(tile, breached, notice)
 	changed.emit()
@@ -482,6 +503,9 @@ func _edge_reserved(edge: Vector4i) -> bool:
 		for path: Array in transit.paths.values():
 			if _crosses_edge(path[0], path.slice(1), edge):
 				return true
+	for passenger in passengers:
+		if passenger.crossing > 0.0 and not passenger.route.is_empty() and edge_between(passenger.cell, passenger.route[0]) == edge:
+			return true
 	return false
 
 
@@ -494,6 +518,9 @@ func _door_needed(edge: Vector4i) -> bool:
 			var start := member.landing if member.landing != INVALID_CELL else member.cell
 			if _crosses_edge(start, member.route, edge):
 				return true
+	for passenger in passengers:
+		if passenger.boarding_delay <= 0.0 and not passenger.route.is_empty() and edge_between(passenger.cell, passenger.route[0]) == edge:
+			return true
 	return false
 
 
@@ -560,6 +587,79 @@ func _path(start: Vector2i, end: Vector2i) -> Array[Vector2i]:
 	for point in _grid.get_point_path(_id(start), _id(end)):
 		path.append(Vector2i(point))
 	return path
+
+
+func _find_cargo_seats() -> void:
+	cargo_seats.clear()
+	for x in range(_bounds.size.x):
+		for y in range(_bounds.size.y):
+			var tile := Vector2i(x, y)
+			if tile_kind(tile) == "G":
+				cargo_seats.append(tile)
+	# Keep the middle of the bay available as an aisle.
+	cargo_seats.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
+		var left_distance := absi(a.x - airlock_tile.x)
+		var right_distance := absi(b.x - airlock_tile.x)
+		if left_distance != right_distance:
+			return left_distance > right_distance
+		return a.y < b.y if a.y != b.y else a.x < b.x)
+	cargo_seats.resize(mini(8, cargo_seats.size()))
+
+
+func board_passengers(count: int) -> void:
+	var staging: Array[Vector2i] = []
+	for y in range(_bounds.size.y):
+		for x in range(_bounds.size.x):
+			var tile := Vector2i(x, y)
+			if tile_kind(tile) == "S" and tile != airlock_tile and _occupant(tile) == null:
+				staging.append(tile)
+	if staging.is_empty():
+		staging.append(_spawns[2])
+	passengers.clear()
+	for index in range(count):
+		var passenger := Passenger.new()
+		passenger.cell = staging[index % staging.size()]
+		passenger.position = Vector2(passenger.cell)
+		passenger.seat = cargo_seats[index] if index < cargo_seats.size() else passenger.cell
+		passenger.boarding_delay = 0.18 * index + 0.25
+		passengers.append(passenger)
+	changed.emit()
+
+
+func unload_passengers() -> void:
+	passengers.clear()
+	changed.emit()
+
+
+func _advance_passengers(delta: float) -> bool:
+	var updated := false
+	for passenger in passengers:
+		if passenger.boarding_delay > 0.0:
+			passenger.boarding_delay = maxf(0.0, passenger.boarding_delay - delta)
+			updated = true
+			continue
+		if passenger.cell == passenger.seat:
+			continue
+		if passenger.route.is_empty():
+			passenger.route = _path(passenger.cell, passenger.seat).slice(1)
+		if passenger.route.is_empty():
+			continue
+		var destination := passenger.route[0]
+		if passenger.crossing == 0.0 and not _door_allows_step(passenger.cell, destination):
+			var door := doors[edge_between(passenger.cell, destination)]
+			if not door.automatic and not door.wants_open:
+				passenger.route.clear()
+			continue
+		var previous := passenger.position
+		passenger.crossing = minf(1.0, passenger.crossing + delta * 2.4)
+		passenger.position = Vector2(passenger.cell).lerp(Vector2(destination), passenger.crossing)
+		passenger.gait += previous.distance_to(passenger.position)
+		if passenger.crossing == 1.0:
+			passenger.cell = destination
+			passenger.route.pop_front()
+			passenger.crossing = 0.0
+		updated = true
+	return updated
 
 
 func _goal_available(tile: Vector2i, member: CrewMember, allow_departure: bool) -> bool:
@@ -670,6 +770,7 @@ func _advance_transits(delta: float) -> bool:
 		var speed := SQUEEZE_SPEED if transit.squeezed else WALK_SPEED
 		transit.distance = minf(float(transit.length), transit.distance + delta * speed)
 		for member in transit.paths:
+			var previous := member.position
 			var path: Array = transit.paths[member]
 			var edge := mini(floori(transit.distance), transit.length - 1)
 			var direction := Vector2(path[edge + 1] - path[edge])
@@ -690,6 +791,7 @@ func _advance_transits(delta: float) -> bool:
 				member.squeeze_side = side.lerp(next_side, transit.distance - edge).normalized()
 				member.squeeze_side *= transit.side_sign
 				member.position += member.squeeze_side * (transit.squeeze_offset * member.squeeze)
+			member.gait += previous.distance_to(member.position) * 1.4
 		for member in transit.yielding:
 			if workstation_pose(member) != WorkPose.NONE:
 				member.position = Vector2(member.cell)
@@ -700,7 +802,9 @@ func _advance_transits(delta: float) -> bool:
 			var proximity := clampf(1.0 - absf(transit.distance - path.find(member.cell)), 0.0, 1.0)
 			member.squeeze = smoothstep(0.0, 1.0, proximity)
 			member.squeeze_side = transit.yielding[member] * transit.side_sign
+			var previous := member.position
 			member.position = Vector2(member.cell) + member.squeeze_side * (SQUEEZE_OFFSET * member.squeeze)
+			member.gait += previous.distance_to(member.position) * 1.4
 		if transit.distance >= transit.length:
 			# Both sides of a swap commit on the same tick.
 			for member in transit.paths:
@@ -761,12 +865,15 @@ func _physics_process(delta: float) -> void:
 	if _advance_transits(delta):
 		_replan_waiting_orders()
 	updated = _advance_doors(delta) or updated
+	updated = _advance_passengers(delta) or updated
 	updated = _start_transits() or updated
 	var repair_rate := 0.0
 	var prepare_rate := 0.0
 	for member in crew:
 		if member.health <= 0.0 or member.blocked or member.landing != INVALID_CELL or not member.route.is_empty():
 			continue
+		if member.order in [Order.REPAIR, Order.SEAL, Order.REPAIR_ROOM]:
+			member.repair_phase += delta
 		match member.order:
 			Order.MOVE:
 				member.order = Order.IDLE

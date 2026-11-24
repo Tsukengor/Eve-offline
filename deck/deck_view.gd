@@ -11,12 +11,11 @@ const CREW_SPRITES := [
 	preload("res://assets/deck/rescuer.png"),
 	preload("res://assets/deck/gunner.png"),
 ]
-const SQUEEZE_SPRITES := [
-	preload("res://assets/deck/pilot_squeeze.png"),
-	preload("res://assets/deck/engineer_squeeze.png"),
-	preload("res://assets/deck/rescuer_squeeze.png"),
-	preload("res://assets/deck/gunner_squeeze.png"),
-]
+const WALK_FRAMES := preload("res://assets/deck/crew_walk.png")
+const REPAIR_FRAMES := preload("res://assets/deck/crew_repair.png")
+const CARGO_SEAT := preload("res://assets/deck/cargo_seat.png")
+const PASSENGER := preload("res://assets/deck/passenger.png")
+const REPAIR_SOUND := preload("res://assets/audio/repair_tools.wav")
 const HELM_SPRITES := [
 	preload("res://assets/deck/pilot_helm.png"),
 	preload("res://assets/deck/engineer_helm.png"),
@@ -27,12 +26,6 @@ const WORK_FRAME := 128.0
 const GUNNER_WORK := preload("res://assets/deck/work/gunner_work.png")
 const WORK_DIRECTIONS := [Vector2i.UP, Vector2i.DOWN, Vector2i.LEFT, Vector2i.RIGHT]
 const WORK_ATLASES := {
-	DeckSimulation.WorkPose.REPAIR: {
-		Vector2i.UP: preload("res://assets/deck/work/repair_north.png"),
-		Vector2i.DOWN: preload("res://assets/deck/work/repair_south.png"),
-		Vector2i.LEFT: preload("res://assets/deck/work/repair_west.png"),
-		Vector2i.RIGHT: preload("res://assets/deck/work/repair_east.png"),
-	},
 	DeckSimulation.WorkPose.AIRLOCK: {
 		Vector2i.UP: preload("res://assets/deck/work/airlock_north.png"),
 		Vector2i.DOWN: preload("res://assets/deck/work/airlock_south.png"),
@@ -50,6 +43,7 @@ const FLOOR_SPRITES := {
 	"C": preload("res://assets/deck/corridor_floor_v2.png"),
 	"W": preload("res://assets/deck/weapons_floor.png"),
 	"L": preload("res://assets/deck/rescue_floor_v2.png"),
+	"G": preload("res://assets/deck/cargo_floor.png"),
 }
 const BRIDGE_SPRITE := preload("res://assets/deck/bridge_console_v2.png")
 const ENGINE_SPRITE := preload("res://assets/deck/engine.png")
@@ -88,6 +82,7 @@ var _crew_buttons: Array[Button] = []
 var _crew_selected_styles: Array[StyleBoxFlat] = []
 var _normal_style: StyleBoxFlat
 var _audio: AudioStreamPlayer
+var _repair_audio: AudioStreamPlayer
 
 
 
@@ -112,6 +107,11 @@ func _ready() -> void:
 	_audio.bus = &"Alerts"
 	_audio.volume_db = -8.0
 	add_child(_audio)
+	_repair_audio = AudioStreamPlayer.new()
+	_repair_audio.bus = &"Interior"
+	_repair_audio.stream = REPAIR_SOUND
+	_repair_audio.volume_db = -5.0
+	add_child(_repair_audio)
 	simulation.damage_alert.connect(_play_alert)
 	simulation.changed.connect(_refresh)
 	if standalone:
@@ -125,6 +125,19 @@ func _physics_process(_delta: float) -> void:
 		if simulation.simulation_speed != speed:
 			simulation.simulation_speed = speed
 			queue_redraw()
+
+
+func _process(_delta: float) -> void:
+	if DisplayServer.get_name() == "headless":
+		return
+	var repairing := (is_visible_in_tree() and not get_tree().paused
+		and simulation.crew.any(func(member: DeckSimulation.CrewMember) -> bool:
+			return simulation.workstation_pose(member) == DeckSimulation.WorkPose.REPAIR))
+	if repairing and not _repair_audio.playing:
+		_repair_audio.pitch_scale = 0.72 if simulation.simulation_speed < 1.0 else 1.0
+		_repair_audio.play()
+	elif not repairing and _repair_audio.playing:
+		_repair_audio.stop()
 
 
 func _play_alert(_tile: Vector2i, breach: bool, _message: String) -> void:
@@ -181,13 +194,10 @@ func _reset() -> void:
 
 
 func _refresh() -> void:
-	if simulation.layout_path == DeckSimulation.RESCUE_LAYOUT:
-		_deck_origin = ORIGIN
-		_deck_cell = CELL
-	elif not simulation.plan.is_empty():
+	if not simulation.plan.is_empty():
 		var size := Vector2(simulation.plan[0].length(), simulation.plan.size())
-		_deck_cell = minf(CELL, minf(636.0 / size.x, 409.0 / size.y))
-		_deck_origin = Vector2(389, 386) - size * _deck_cell * 0.5
+		_deck_cell = minf(CELL, minf(636.0 / size.x, 454.0 / size.y))
+		_deck_origin = Vector2(389, 381) - size * _deck_cell * 0.5
 	if simulation.tile_kind(_hovered_cell) == ".":
 		_hovered_cell = DeckSimulation.INVALID_CELL
 	var pause_title := "Продолжить" if get_tree().paused else "Пауза"
@@ -359,17 +369,23 @@ func _draw_deck() -> void:
 	_draw_module(simulation.airlock_tile, AIRLOCK_SPRITE, ACCENT if simulation.airlock_progress >= 1.0 else AMBER)
 	_draw_module(simulation.weapons_tile, WEAPONS_SPRITE, WEAPONS_COLOR if simulation.weapons_are_manned() else MUTED)
 	if simulation.layout_path == DeckSimulation.RESCUE_LAYOUT:
-		_text("МОСТИК", Vector2(134, 200), 12, MUTED)
-		_text("РЕАКТОР", Vector2(331, 200), 12, MUTED)
-		_text("МАШИННОЕ ОТДЕЛЕНИЕ", Vector2(463, 200), 12, MUTED)
-		_text("ВООРУЖЕНИЕ", Vector2(134, 590), 12, MUTED)
-		_text("КИСЛОРОД", Vector2(301, 590), 12, MUTED)
-		_text("СПАСАТЕЛЬНЫЙ ШЛЮЗ", Vector2(463, 590), 12, MUTED)
+		_room_label("МОСТИК", Vector2i(1, 1))
+		_room_label("РЕАКТОР", Vector2i(7, 1))
+		_room_label("МАШИННОЕ ОТДЕЛЕНИЕ", Vector2i(11, 1))
+		_room_label("ВООРУЖЕНИЕ", Vector2i(1, 9))
+		_room_label("КИСЛОРОД", Vector2i(6, 9))
+		_room_label("ШЛЮЗ", Vector2i(11, 9))
+		_text("ГРУЗОВОЙ ОТСЕК", _cell_center(Vector2i(10, 14)) + Vector2(-14, 29), 12, MUTED)
 	_draw_module(simulation.life_support_tile, LIFE_SUPPORT_SPRITE, ACCENT)
 	_draw_module(simulation.reactor_tile, REACTOR_SPRITE, AMBER if simulation.operator_at(DeckSimulation.WorkPose.REACTOR) == null else ACCENT)
 	for tile in simulation.hull.breaches:
 		_draw_sprite(BREACH_SPRITE, _cell_center(tile), 27.0)
 		_draw_sprite(AIR_LEAK, _cell_center(tile) + Vector2(3, -9) * _deck_cell / CELL, 21.0, Color(1, 1, 1, 0.65))
+
+	for tile in simulation.cargo_seats:
+		_draw_sprite(CARGO_SEAT, _cell_center(tile), 23.0)
+	for passenger in simulation.passengers:
+		_draw_passenger(passenger)
 
 	var selected := simulation.crew[_selected]
 	var path := PackedVector2Array([_crew_point(selected)])
@@ -400,23 +416,48 @@ func _draw_crew_member(index: int) -> void:
 	if pose == DeckSimulation.WorkPose.HELM or pose == DeckSimulation.WorkPose.WEAPONS:
 		_draw_sprite(HELM_SPRITES[index], point, 26.0)
 		return
+	var direction := member.target - member.cell
+	if pose == DeckSimulation.WorkPose.REPAIR:
+		var frame := int(member.repair_phase * 9.0) % 4
+		var row := WORK_DIRECTIONS.find(direction) * 4 + index
+		_draw_atlas_frame(REPAIR_FRAMES, point, 27.0, Vector2(frame, row))
+		return
 	if pose != DeckSimulation.WorkPose.NONE:
-		var direction := member.target - member.cell
-		var action := DeckSimulation.WorkPose.AIRLOCK if pose in [DeckSimulation.WorkPose.LIFE_SUPPORT, DeckSimulation.WorkPose.REACTOR] else pose
-		var atlas: Texture2D = WORK_ATLASES[action][direction]
-		var source := Rect2(WORK_FRAME * index, 0, WORK_FRAME, WORK_FRAME)
+		var atlas: Texture2D = WORK_ATLASES[DeckSimulation.WorkPose.AIRLOCK][direction]
+		var frame := Vector2(index, 0)
 		if index == DeckSimulation.GUNNER_INDEX:
 			atlas = GUNNER_WORK
-			var row := 0.0 if pose == DeckSimulation.WorkPose.REPAIR else 1.0
-			source.position = Vector2(WORK_DIRECTIONS.find(direction), row) * WORK_FRAME
-		var extent := Vector2.ONE * 27.0 * _deck_cell / CELL
-		draw_texture_rect_region(atlas, Rect2(point - extent * 0.5, extent), source)
+			frame = Vector2(WORK_DIRECTIONS.find(direction), 1)
+		_draw_atlas_frame(atlas, point, 27.0, frame)
 		return
-	var sprite: Texture2D = SQUEEZE_SPRITES[index] if member.squeeze > 0.12 else CREW_SPRITES[index]
-	var lean := (member.squeeze_side.x + member.squeeze_side.y) * member.squeeze * 0.10
-	draw_set_transform(point, lean, Vector2(-1.0 if member.face_left else 1.0, 1.0))
-	_draw_sprite(sprite, Vector2.ZERO, lerpf(21.5, 17.0, member.squeeze))
+	var squeezing := member.squeeze > 0.12
+	draw_set_transform(point, 0.0, Vector2(-1.0 if member.face_left else 1.0, 1.0))
+	if member.landing != simulation.INVALID_CELL or squeezing:
+		var frame := int(member.gait * 4.0) % 4
+		_draw_atlas_frame(WALK_FRAMES, Vector2.ZERO, lerpf(21.5, 17.0, member.squeeze),
+			Vector2(frame, index + 4 if squeezing else index))
+	else:
+		_draw_sprite(CREW_SPRITES[index], Vector2.ZERO, 21.5)
 	draw_set_transform(Vector2.ZERO)
+
+
+func _room_label(title: String, anchor: Vector2i) -> void:
+	_text(title, _cell_center(anchor) - Vector2(_deck_cell * 0.48, _deck_cell * 0.66), 11, MUTED)
+
+
+func _draw_atlas_frame(atlas: Texture2D, at: Vector2, size: float, frame: Vector2) -> void:
+	var extent := Vector2.ONE * size * _deck_cell / CELL
+	draw_texture_rect_region(atlas, Rect2(at - extent * 0.5, extent),
+		Rect2(frame * WORK_FRAME, Vector2.ONE * WORK_FRAME))
+
+
+func _draw_passenger(passenger: DeckSimulation.Passenger) -> void:
+	if passenger.boarding_delay > 0.0:
+		return
+	var point := _deck_origin + (passenger.position + Vector2.ONE * 0.5) * _deck_cell
+	var size := Vector2.ONE * 19.0 * _deck_cell / CELL
+	var frame := 3 if passenger.cell == passenger.seat else int(passenger.gait * 8.0) % 3
+	draw_texture_rect_region(PASSENGER, Rect2(point - size * 0.5, size), Rect2(frame * 32, 0, 32, 32))
 
 
 func _draw_door(edge: Vector4i, door: DeckSimulation.Door) -> void:

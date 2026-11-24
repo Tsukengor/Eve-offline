@@ -5,8 +5,15 @@ const SpaceDisplay = preload("res://flight/space_display.gd")
 const DeckDisplay = preload("res://deck/deck_view.gd")
 const Training = preload("res://flight/training.gd")
 const SHOT_SOUND := preload("res://assets/audio/shot.wav")
-const PULSE_SOUND := preload("res://assets/audio/pulse.wav")
 const LASER_SOUND := preload("res://assets/audio/laser.wav")
+const SHOT_SOUNDS := {
+	Voyage.WeaponProfile.Kind.KINETIC: SHOT_SOUND,
+	Voyage.WeaponProfile.Kind.MISSILE: preload("res://assets/audio/missile_launch.wav"),
+	Voyage.WeaponProfile.Kind.EMP: preload("res://assets/audio/emp_discharge.wav"),
+	Voyage.WeaponProfile.Kind.RAIL: preload("res://assets/audio/rail_discharge.wav"),
+	Voyage.WeaponProfile.Kind.FLAK: preload("res://assets/audio/flak_shot.wav"),
+	Voyage.WeaponProfile.Kind.PUSH: preload("res://assets/audio/impulse_shot.wav"),
+}
 
 enum Mode { FLIGHT, DECK, MAP }
 enum Session { CAMPAIGN, TRAINING, ARENA }
@@ -18,7 +25,7 @@ enum Session { CAMPAIGN, TRAINING, ARENA }
 var session := Session.CAMPAIGN
 var mode := Mode.FLIGHT
 var _training: Training
-var _shot_audio: AudioStreamPlayer
+var _shot_audio: Dictionary[int, AudioStreamPlayer] = {}
 var _laser_audio: AudioStreamPlayer
 var _mode_before_map := Mode.FLIGHT
 var _paused_before_map := false
@@ -72,10 +79,13 @@ func _ready() -> void:
 	deck.simulation.damage_alert.connect(_show_alert)
 	voyage.in_arena = session == Session.ARENA
 	voyage.in_training = session == Session.TRAINING
-	_shot_audio = AudioStreamPlayer.new()
-	_shot_audio.bus = &"Weapons"
-	_shot_audio.max_polyphony = 8
-	add_child(_shot_audio)
+	for kind in SHOT_SOUNDS:
+		var audio := AudioStreamPlayer.new()
+		audio.bus = &"Weapons"
+		audio.stream = SHOT_SOUNDS[kind]
+		audio.max_polyphony = 8
+		_shot_audio[kind] = audio
+		add_child(audio)
 	_laser_audio = AudioStreamPlayer.new()
 	_laser_audio.bus = &"Weapons"
 	var loop := LASER_SOUND.duplicate() as AudioStreamWAV
@@ -156,7 +166,7 @@ func _refresh() -> void:
 	_spawn_drill.disabled = voyage.enemies.size() >= Voyage.MAX_TEST_ENEMIES
 	_spawn_fighter.disabled = _spawn_drill.disabled
 	_spawn_missile_fighter.disabled = _spawn_drill.disabled
-	_clear_targets.disabled = voyage.enemies.is_empty() and voyage.projectiles.is_empty()
+	_clear_targets.disabled = voyage.enemies.is_empty() and voyage.projectiles.is_empty() and voyage.wrecks.is_empty()
 	_alert.visible = mode == Mode.FLIGHT and _alert_time > 0.0
 	if mode == Mode.DECK:
 		return
@@ -165,7 +175,10 @@ func _refresh() -> void:
 		_action.disabled = not voyage.jump_blocker(space.selected).is_empty()
 	else:
 		_space_pause.text = "Продолжить" if get_tree().paused else "Пауза"
-		_action.text = "Отстыковка" if voyage.docked else "Стыковка"
+		if voyage.docking_time > 0.0:
+			_action.text = "Идёт стыковка"
+		else:
+			_action.text = "Отстыковка" if voyage.docked else "Стыковка"
 		_action.disabled = get_tree().paused or not voyage.dock_blocker().is_empty()
 
 
@@ -319,12 +332,8 @@ func _process(delta: float) -> void:
 
 
 func _play_shot(kind: int) -> void:
-	if DisplayServer.get_name() == "headless":
-		return
-	var sound := PULSE_SOUND if kind in [Voyage.WeaponProfile.Kind.EMP, Voyage.WeaponProfile.Kind.PUSH] else SHOT_SOUND
-	if _shot_audio.stream != sound:
-		_shot_audio.stream = sound
-	_shot_audio.play()
+	if DisplayServer.get_name() != "headless" and _shot_audio.has(kind):
+		_shot_audio[kind].play()
 
 
 func _return_to_menu() -> void:

@@ -4,9 +4,12 @@ const DeckSimulation = preload("res://deck/deck_simulation.gd")
 const Physics = preload("res://flight/ship_physics.gd")
 const Model = preload("res://flight/ship_model.gd")
 const WeaponProfile = preload("res://flight/weapon_profile.gd")
+const HIT_SECONDS := 0.23
 
 @export var call_sign := "Неизвестный корабль"
 @export var sprite: Texture2D
+@export var hull_wreck: Texture2D
+@export var crew_derelict: Texture2D
 @export var sprite_size := 76.0
 @export var weapon: WeaponProfile
 @export var model: Model = preload("res://flight/models/drill.tres")
@@ -29,6 +32,8 @@ var shot_requested := false
 var conserving_power := false
 var weapons_cooldown := 0.0
 var flash_remaining := 0.0
+var hit_remaining := 0.0
+var hit_side := Vector2.UP
 
 
 func _ready() -> void:
@@ -39,6 +44,7 @@ func _ready() -> void:
 	body.power = deck.power
 	deck.set_physics_process(false)
 	deck.reset(true)
+	deck.hit_received.connect(_mark_hit)
 	for index in range(deck.crew.size()):
 		deck.crew[index].title = "%s · %d" % [call_sign, index + 1]
 
@@ -64,6 +70,13 @@ func advance(delta: float, target_position: Vector2, target_velocity: Vector2) -
 		_assign_crew()
 	_steer(delta, target_position, target_velocity)
 	position += velocity * delta
+
+
+func _mark_hit(side: Vector2) -> void:
+	if hit_remaining > HIT_SECONDS * 0.45:
+		return
+	hit_side = side.normalized() if not side.is_zero_approx() else Vector2.UP
+	hit_remaining = HIT_SECONDS
 
 
 func _steer(_delta: float, _target_position: Vector2, _target_velocity: Vector2) -> void:

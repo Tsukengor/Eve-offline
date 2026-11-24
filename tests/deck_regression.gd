@@ -245,6 +245,7 @@ func _test_pass_stationary() -> void:
 	var a := _sim.crew[0]
 	var b := _sim.crew[1]
 	_check(a.squeeze > 0.0 and b.squeeze > 0.0, "A stationary crew member yields to passing traffic")
+	_check(a.gait > 0.0 and b.gait > 0.0, "Moving and yielding both advance their gait frames")
 	_tick(100)
 	_check(a.cell == Vector2i(8, 5) and b.cell == Vector2i(6, 5),
 		"Passing never displaces the stationary crew member")
@@ -283,6 +284,8 @@ func _test_workstation_poses() -> void:
 	_sim.assign_order(2, _sim.AIRLOCK)
 	_tick(60)
 	_check(_sim.workstation_pose(_sim.crew[1]) == poses.REPAIR, "The engineer starts the voyage at the repair station")
+	_check(_sim.crew[0].gait > 0.0 and _sim.crew[1].repair_phase > 0.0,
+		"Walking and repairing advance separate animation clocks")
 	for frame in range(520):
 		if _sim.workstation_pose(_sim.crew[1]) == poses.REPAIR and _sim.workstation_pose(_sim.crew[2]) == poses.AIRLOCK:
 			break

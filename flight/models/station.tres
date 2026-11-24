@@ -4,4 +4,4 @@
 
 [resource]
 script = ExtResource("1")
-hull = PackedVector2Array(0, -53, 44, -30, 50, 0, 44, 30, 0, 53, -44, 30, -50, 0, -44, -30)
+hull = PackedVector2Array(-17, -129, 17, -129, 129, -17, 129, 17, 17, 129, -17, 129, -129, 17, -129, -17)

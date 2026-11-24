@@ -89,7 +89,11 @@ func _draw_flight_sidebar() -> void:
 		return
 	_section("СТАНЦИЯ", 153)
 	_text("«%s»" % system.station, Vector2(816, 184), 26)
-	var docked_text := "Пристыкован" if voyage.docked else "%d ед. до станции" % roundi(voyage.distance_to_station())
+	var docked_text := "%d ед. до станции" % roundi(voyage.distance_to_station())
+	if voyage.docked:
+		docked_text = "Пристыкован"
+	elif voyage.docking_time > 0.0:
+		docked_text = "Захват причалом"
 	_text(docked_text, Vector2(816, 213), 16, MUTED)
 	var speed := "%d ед/с" % ceili(voyage.velocity.length())
 	_metric("Скорость", speed, 255, ACCENT if voyage.velocity.length() <= Voyage.DOCK_SPEED else TEXT)
@@ -99,7 +103,7 @@ func _draw_flight_sidebar() -> void:
 	_metric("Корпус", "%d%%" % floori(hull * 100.0), 395, TEXT if hull > 0.4 else DANGER)
 	_draw_energy(421)
 	_draw_objective(452)
-	if not voyage.in_arena and voyage.battle_result.is_empty() and not voyage.dock_blocker().is_empty() and voyage.stage != Voyage.Stage.COMPLETE:
+	if voyage.docking_time <= 0.0 and voyage.battle_result.is_empty() and not voyage.dock_blocker().is_empty() and voyage.stage != Voyage.Stage.COMPLETE:
 		_text(voyage.dock_blocker(), Vector2(816, 527), 15, AMBER)
 
 

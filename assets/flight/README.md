@@ -32,6 +32,12 @@
 
 > One transparent horizontal 4-cell pixel-art sprite atlas for the fictional 2D Godot space game Eve Offline, strict overhead, crisp bold clusters. Four isolated game effects centered exactly in separate equal quarter-width columns with copious transparent gutters: first column a short violet-white laser streak pointing UP vertically with clean narrow core; second column a tiny dark orange homing missile pointing UP, with small amber exhaust; third column a circular copper-orange explosion sprite with bright center and uneven smoke fringe; fourth column a small icy-cyan electrical arc and spark cluster for an EMP. No lettering, lines between cells, backgrounds, spacecraft, or drop shadows. Genuine alpha transparency. Each sprite reads clearly at 16 to 48 pixels.
 
+## Вращающиеся станции и остовы
+
+`orbital_station.png` создан встроенным ImageGen. `orbital_station_distress.png` использует ту же геометрию с трещиной в броне и аварийной подсветкой. `docking_clamps.png` показывает захват и закрепление у причала. Для остовов каждого противника есть два растровых варианта. Пять кадров `impact_frames.png` показывают попадание, восемь кадров `ship_explosion_frames.png` показывают разрушение корпуса, четыре кадра `crew_blackout_frames.png` показывают отключение корабля после гибели экипажа.
+
+> Use case: stylized-concept. Game asset for Eve Offline. One detailed industrial orbital rescue station seen directly overhead, orthographic 2D pixel art on genuinely transparent background. A centered symmetrical circular station with four short radial docking arms aligned exactly to the cardinal axes (top, bottom, left, right), squared flat dock tips all the same radius. Disk behind the arms is about 75% of their overall diameter. Dark navy, slate steel and indigo hull, sparse teal lights, painted yellow hazard stripes on each dock, chunky pixel clusters. Fine but crisp details include segmented armor, riveted service panels, teal observation ports and radiators. Fully visible silhouette, a clean margin, no text, no shadows extending outside, no stars, no detached debris.
+
 ## Рельсотрон, ПВО и толкатель
 
 `rail_bolt.png`, `flak_burst.png` и `impulse_wave.png` вырезаны из растрового атласа встроенного ImageGen.

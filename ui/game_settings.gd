@@ -16,10 +16,11 @@ const LABELS := {
 	"crew_1": "Выбрать пилота", "crew_2": "Выбрать инженера", "crew_3": "Выбрать спасателя", "crew_4": "Выбрать наводчика",
 	"order_modifier": "Модификатор приказов",
 }
-const BUSES := {"Master": "Общая громкость", "Music": "Музыка", "Weapons": "Выстрелы", "Alerts": "Оповещения"}
+const BUSES := {"Master": "Общая громкость", "Music": "Музыка", "Weapons": "Выстрелы",
+	"Alerts": "Оповещения", "Interior": "Работа экипажа"}
 
 var bindings := DEFAULTS.duplicate()
-var volumes := {"Master": 1.0, "Music": 0.75, "Weapons": 1.0, "Alerts": 1.0}
+var volumes := {"Master": 1.0, "Music": 0.75, "Weapons": 1.0, "Alerts": 1.0, "Interior": 1.0}
 
 
 func _ready() -> void:

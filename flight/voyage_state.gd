@@ -40,12 +40,27 @@ const SYSTEMS := [
 const ROUTES := [Vector3i(HOME, DISTRESS, 2), Vector3i(DISTRESS, REFUGE, 3)]
 const FULL_FUEL := 5
 const RESCUE_COUNT := 8
-const DOCK_RANGE := 105.0
+const DOCK_RANGE := 194.0
 const DOCK_SPEED := 34.0
-const CONTACT_RADIUS := 82.0
+const STATION_SIZE := 258.0
+const STATION_SPIN := 0.035
+const DOCK_RADIUS := 163.0
+const DOCK_SECONDS := 1.65
+const PASSIVE_ANGULAR_DECELERATION := 0.16
 const MAX_SPEED := 225.0
 const MAX_SPIN := 3.3
 const FLASH_SECONDS := 0.10
+
+class Wreck:
+	var position: Vector2
+	var velocity: Vector2
+	var rotation: float
+	var spin: float
+	var texture: Texture2D
+	var size: float
+	var age := 0.0
+	var broken_hull: bool
+
 
 @export var weapon: WeaponProfile
 
@@ -57,6 +72,11 @@ var survivors_onboard := 0
 var delivered := 0
 var body := Physics.Body.new()
 var station_body := Physics.Body.new()
+var docking_time := 0.0
+var dock_angle := 0.0
+var _dock_start_bearing := 0.0
+var _dock_start_radius := 0.0
+var _dock_start_heading := 0.0
 var ship_position: Vector2:
 	get: return body.position
 	set(value): body.position = value
@@ -95,6 +115,8 @@ var training_can_dock := false
 var training_hint := ""
 var training_step := 1
 var enemies: Array[EnemyShip] = []
+var wrecks: Array[Wreck] = []
+var _wrecks_by_system: Dictionary[int, Array] = {}
 var enemy: EnemyShip:
 	get:
 		return null if enemies.is_empty() else enemies[scan_index % enemies.size()]
@@ -112,9 +134,11 @@ func configure(ship_deck: DeckSimulation) -> void:
 	deck = ship_deck
 	_voyage_weapon = weapon
 	body.model = RESCUE_MODEL
+	body.passive_angular_deceleration = PASSIVE_ANGULAR_DECELERATION
 	body.power = deck.power
 	station_body.model = STATION_MODEL
 	station_body.fixed = true
+	station_body.spin = STATION_SPIN
 	deck.changed.connect(changed.emit)
 	reset()
 
@@ -133,6 +157,8 @@ func reset() -> void:
 	survivors_onboard = 0
 	delivered = 0
 	incident_seen = false
+	wrecks.clear()
+	_wrecks_by_system.clear()
 	_spawn_ship()
 	set_test_physics(test_mass, test_thrust)
 	set_test_damage(player_damage, enemy_damage)
@@ -175,6 +201,7 @@ func finish_training_target(target: EnemyShip) -> void:
 func clear_test_enemies() -> void:
 	if not in_arena:
 		return
+	wrecks.clear()
 	stop_laser()
 	_clear_enemies()
 	for index in range(projectiles.size() - 1, -1, -1):
@@ -232,6 +259,8 @@ func _spawn_ship() -> void:
 	angular_velocity = 0.0
 	body.active.clear()
 	station_body.position = station_position()
+	station_body.heading = -PI * 0.5
+	docking_time = 0.0
 	acceleration = Vector2.ZERO
 	turn_input = 0.0
 	body.fixed = false
@@ -259,6 +288,8 @@ func route_cost(destination: int) -> int:
 
 
 func jump_blocker(destination: int) -> String:
+	if docking_time > 0.0:
+		return "Дождитесь завершения стыковки."
 	if in_training:
 		return "Учебный рейс проходит в одной системе."
 	if in_arena:
@@ -283,7 +314,9 @@ func jump(destination: int) -> bool:
 	if not jump_blocker(destination).is_empty():
 		return false
 	fuel -= route_cost(destination)
+	_wrecks_by_system[current_system] = wrecks.duplicate()
 	current_system = destination
+	wrecks.assign(_wrecks_by_system.get(destination, []))
 	_spawn_ship()
 	enemies.clear()
 	scan_index = 0
@@ -303,6 +336,8 @@ func jump(destination: int) -> bool:
 
 
 func dock_blocker() -> String:
+	if docking_time > 0.0:
+		return "Идёт стыковка."
 	if in_training and not training_can_dock:
 		return "Сначала выполни учебные задачи."
 	if in_arena:
@@ -328,14 +363,13 @@ func toggle_docking() -> bool:
 		body.fixed = false
 		notice = "Корабль отстыкован."
 	else:
-		_dock()
+		_begin_docking()
 	changed.emit()
 	return true
 
 
-func _dock() -> void:
+func _begin_docking() -> void:
 	stop_laser()
-	docked = true
 	body.fixed = true
 	body.active.clear()
 	thrusting = false
@@ -343,17 +377,45 @@ func _dock() -> void:
 	angular_velocity = 0.0
 	acceleration = Vector2.ZERO
 	flash_remaining = 0.0
-	var approach := station_position().direction_to(ship_position)
-	ship_position = station_position() + approach * (CONTACT_RADIUS + 4.0)
 	velocity = Vector2.ZERO
-	heading = ship_position.angle_to_point(station_position())
+	var station_rotation := station_body.heading + PI * 0.5
+	_dock_start_bearing = station_position().angle_to_point(ship_position) - station_rotation
+	dock_angle = snappedf(_dock_start_bearing, PI * 0.5)
+	_dock_start_radius = distance_to_station()
+	_dock_start_heading = heading
+	docking_time = DOCK_SECONDS
+
+
+func _advance_station(delta: float) -> void:
+	if docking_time <= 0.0 and not docked:
+		return
+	if deck.disabled():
+		docking_time = 0.0
+		docked = false
+		body.fixed = false
+		return
+	var was_docking := docking_time > 0.0
+	docking_time = move_toward(docking_time, 0.0, delta)
+	var approach := smoothstep(0.0, 1.0, 1.0 - docking_time / DOCK_SECONDS)
+	var angle := lerp_angle(_dock_start_bearing, dock_angle, approach) + station_body.heading + PI * 0.5
+	var radius := lerpf(_dock_start_radius, DOCK_RADIUS, approach)
+	ship_position = station_position() + Vector2.from_angle(angle) * radius
+	heading = lerp_angle(_dock_start_heading, angle + PI, approach)
+	if was_docking and docking_time == 0.0:
+		_finish_docking()
+
+
+func _finish_docking() -> void:
+	docked = true
 	if in_training:
+		deck.board_passengers(RESCUE_COUNT)
 		delivered = RESCUE_COUNT
 		stage = Stage.COMPLETE
 		return
 	if current_system == DISTRESS:
 		if stage == Stage.ANSWER_DISTRESS:
 			survivors_onboard = RESCUE_COUNT
+			deck.board_passengers(survivors_onboard)
 			stage = Stage.DELIVER_SURVIVORS
 			notice = "На борту %d человек. Доставьте их в Гавань или на Рубеж." % RESCUE_COUNT
 		else:
@@ -363,6 +425,7 @@ func _dock() -> void:
 	if stage == Stage.DELIVER_SURVIVORS:
 		delivered = survivors_onboard
 		survivors_onboard = 0
+		deck.unload_passengers()
 		stage = Stage.COMPLETE
 		notice = "На станцию «%s» доставлено %d человек." % [SYSTEMS[current_system].station, delivered]
 	else:
@@ -371,7 +434,9 @@ func _dock() -> void:
 
 func _physics_process(delta: float) -> void:
 	delta *= simulation_speed
-	var firing := (manual_control and not docked and stage != Stage.COMPLETE
+	if not in_arena:
+		station_body.heading = wrapf(station_body.heading + station_body.spin * delta, -PI, PI)
+	var firing := (manual_control and not docked and docking_time <= 0.0 and stage != Stage.COMPLETE
 		and battle_result.is_empty() and Input.is_action_pressed("flight_fire"))
 	if not firing:
 		stop_laser()
@@ -387,19 +452,22 @@ func _physics_process(delta: float) -> void:
 	var stabilized := manual_control and Input.is_action_pressed("flight_stabilize")
 	var changed_flight := advance_flight(delta, steering, forward_thrust, braking, stabilized)
 	var changed_battle := _advance_battle(delta)
+	if not in_arena:
+		_advance_station(delta)
+	var changed_wrecks := _advance_wrecks(delta)
 	var channeling := weapon != null and weapon.kind == WeaponProfile.Kind.LASER
 	if firing and channeling:
 		fire()
 	var changed_weapons := _advance_weapons(delta)
 	if firing and not channeling and fire():
 		return # Firing already notified the view.
-	if changed_flight or changed_weapons or changed_battle:
+	if changed_flight or changed_weapons or changed_battle or changed_wrecks or not in_arena:
 		changed.emit()
 
 
 func advance_flight(delta: float, steering: float, forward_thrust: bool, braking: bool,
 		stabilized := false) -> bool:
-	if docked or stage == Stage.COMPLETE or not battle_result.is_empty() or delta <= 0.0:
+	if docked or docking_time > 0.0 or stage == Stage.COMPLETE or not battle_result.is_empty() or delta <= 0.0:
 		return false
 	var previous_velocity := velocity
 	var previous_acceleration := acceleration
@@ -444,7 +512,7 @@ func weapon_status() -> String:
 		return "Орудие отключено"
 	if not deck.weapons_are_manned():
 		return "Пост свободен"
-	if docked or stage == Stage.COMPLETE or not battle_result.is_empty():
+	if docked or docking_time > 0.0 or stage == Stage.COMPLETE or not battle_result.is_empty():
 		return "Заблокировано"
 	if weapon.kind == WeaponProfile.Kind.LASER:
 		return "Луч активен" if is_instance_valid(laser_beam) else ("Зарядка" if _laser_spent or deck.power.energy <= 0.0 else "Готово")
@@ -454,7 +522,7 @@ func weapon_status() -> String:
 
 
 func fire() -> bool:
-	if weapon == null or weapon.projectile == null or docked or stage == Stage.COMPLETE or not battle_result.is_empty():
+	if weapon == null or weapon.projectile == null or docked or docking_time > 0.0 or stage == Stage.COMPLETE or not battle_result.is_empty():
 		return false
 	if deck.disabled() or not deck.weapons_are_manned():
 		return false
@@ -522,7 +590,7 @@ func _advance_weapons(delta: float) -> bool:
 
 
 func _try_flak() -> void:
-	if not flight_computer or not flak_enabled or flak_cooldown > 0.0 or docked:
+	if not flight_computer or not flak_enabled or flak_cooldown > 0.0 or docked or docking_time > 0.0:
 		return
 	if deck.disabled() or not deck.module_online(deck.weapons_tile) or not deck.power.can_spend(FLAK.energy_cost):
 		return
@@ -582,7 +650,10 @@ func _advance_battle(delta: float) -> bool:
 		return false
 	for index in range(enemies.size() - 1, -1, -1):
 		var hostile := enemies[index]
+		hostile.hit_remaining = move_toward(hostile.hit_remaining, 0.0, delta)
 		if hostile.disabled():
+			if not in_training:
+				_add_wreck(hostile)
 			notice = "%s выведен из строя." % hostile.call_sign
 			if hostile != _cascade_enemy:
 				hostile.queue_free()
@@ -600,6 +671,26 @@ func _advance_battle(delta: float) -> bool:
 			if hit != null:
 				Physics.resolve(hostile.body, enemies[other].body, hit, 0.18)
 	return true
+
+
+func _add_wreck(hostile: EnemyShip) -> void:
+	var wreck := Wreck.new()
+	wreck.position = hostile.model.world_point(Vector2.ZERO, hostile.position, hostile.heading)
+	wreck.velocity = hostile.velocity if hostile.deck.hull.integrity > 0.0 else hostile.velocity * 0.45
+	wreck.rotation = hostile.heading + PI * 0.5
+	wreck.spin = hostile.body.spin
+	wreck.broken_hull = hostile.deck.hull.integrity <= 0.0
+	wreck.texture = hostile.hull_wreck if wreck.broken_hull else hostile.crew_derelict
+	wreck.size = hostile.sprite_size
+	wrecks.append(wreck)
+
+
+func _advance_wrecks(delta: float) -> bool:
+	for wreck in wrecks:
+		wreck.age += delta
+		wreck.position += wreck.velocity * delta
+		wreck.rotation += wreck.spin * delta
+	return not wrecks.is_empty()
 
 
 func _fire_hostile(hostile: EnemyShip) -> void:

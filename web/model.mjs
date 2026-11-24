@@ -2,6 +2,7 @@ export const LIMITS = {width: 24, height: 18};
 export const ROOMS = {
   C: ['Коридор', '#233a52'], B: ['Мостик', '#254664'], E: ['Двигатели', '#553e3a'],
   S: ['Шлюз', '#285049'], W: ['Вооружение', '#51415d'], L: ['Кислород', '#275368'], R: ['Реактор', '#574a35'],
+  G: ['Грузовой отсек', '#505244'],
 };
 export const MODULES = {
   bridge: ['B', 'Мостик'], engine: ['E', 'Двигатели'], airlock: ['S', 'Шлюз'],
@@ -101,7 +102,7 @@ export function inspectLayout(data) {
   const rows = data.plan;
   const width = rows?.[0]?.length;
   if (!Array.isArray(rows) || !rows.length || rows.length > LIMITS.height || !width || width > LIMITS.width ||
-    rows.some(row => typeof row !== 'string' || row.length !== width || /[^.CBESWLR]/.test(row)) ||
+    rows.some(row => typeof row !== 'string' || row.length !== width || /[^.CBESWLRG]/.test(row)) ||
     !data.modules || typeof data.modules !== 'object' || Array.isArray(data.modules) || !Array.isArray(data.edges)) {
     return {errors:['Проверьте размеры и содержимое сетки, модулей и границ.']};
   }

@@ -1,13 +1,18 @@
-[gd_scene load_steps=5 format=3]
+[gd_scene load_steps=7 format=3]
 
 [ext_resource type="Script" path="res://flight/fighter_enemy.gd" id="1"]
 [ext_resource type="Texture2D" path="res://assets/flight/fighter.png" id="2"]
 [ext_resource type="Resource" path="res://flight/models/fighter.tres" id="3"]
 [ext_resource type="Resource" path="res://flight/fighter_weapon.tres" id="4"]
 
+[ext_resource type="Texture2D" path="res://assets/flight/fighter_wreck.png" id="5"]
+[ext_resource type="Texture2D" path="res://assets/flight/fighter_derelict.png" id="6"]
+
 [node name="FighterEnemy" type="Node"]
 script = ExtResource("1")
 sprite = ExtResource("2")
+hull_wreck = ExtResource("5")
+crew_derelict = ExtResource("6")
 model = ExtResource("3")
 call_sign = "Истребитель"
 sprite_size = 64.0

@@ -33,11 +33,39 @@ func _test() -> void:
 	_check_railgun()
 	_check_flak()
 	_check_pusher()
+	_check_ship_effects()
 	_game._toggle_arena()
 	_check(_game.voyage.weapon.kind == 0, "The rescue scenario retains its kinetic weapon")
 	if _failures == 0:
 		print("Combat regression checks passed.")
 	quit(_failures)
+
+
+func _check_ship_effects() -> void:
+	_game._reset()
+	var voyage := _game.voyage
+	var fighter := voyage.add_test_enemy(Voyage.Opponent.FIGHTER)
+	var drill := voyage.add_test_enemy(Voyage.Opponent.DRILL)
+	fighter.deck.apply_hit(10.0, 0.0, 0.0, Vector2.LEFT)
+	_check(fighter.hit_remaining > 0.0 and fighter.hit_side == Vector2.LEFT,
+		"A successful hit starts the flash on the impact side")
+	fighter.deck.apply_hit(Hull.HULL_MAX, 0.0)
+	for member in drill.deck.crew:
+		member.health = 0.0
+	drill.velocity = Vector2(8, 0)
+	voyage._advance_battle(TICK)
+	_check(voyage.enemies.is_empty() and voyage.wrecks.size() == 2, "Both defeat causes leave persistent hulls")
+	if voyage.wrecks.size() == 2:
+		var derelict := voyage.wrecks[0]
+		var wreck := voyage.wrecks[1]
+		_check(not derelict.broken_hull and wreck.broken_hull and derelict.texture == drill.crew_derelict
+			and wreck.texture == fighter.hull_wreck, "Crew loss and hull failure select different visuals")
+		var position := derelict.position
+		voyage._advance_wrecks(2.0)
+		_check(derelict.position == position + Vector2(16, 0) and derelict.age == 2.0,
+			"The derelict drifts after the animation ends")
+	voyage.clear_test_enemies()
+	_check(voyage.wrecks.is_empty(), "Clearing the test field removes old wrecks")
 
 
 func _check_pressure_links() -> void:

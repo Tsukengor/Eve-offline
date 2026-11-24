@@ -269,7 +269,8 @@ static func _rail(shot: Projectile, delta: float, targets: Array[Target], statio
 		if visited.has(room):
 			continue
 		visited[room] = true
-		target.deck.apply_hit(shot.damage, shot.breach_chance, shot.crew_damage, Vector2.ZERO, crossing.tile)
+		var side := _side(target, start, shot.velocity)
+		target.deck.apply_hit(shot.damage, shot.breach_chance, shot.crew_damage, side, crossing.tile)
 		shot.penetration_left -= 1
 		if shot.penetration_left <= 0:
 			return false
