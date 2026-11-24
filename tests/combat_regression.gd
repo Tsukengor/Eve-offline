@@ -18,6 +18,7 @@ func _initialize() -> void:
 func _test() -> void:
 	_game = GAME.instantiate()
 	root.add_child(_game)
+	_check(_game.voyage.deck.load_layout("res://tests/rescue_corridor_fixture.json").is_empty(), "Load the damage fixture")
 	_check_pressure_links()
 	_check_damage_and_repairs()
 	_check_operators()
@@ -31,8 +32,7 @@ func _test() -> void:
 	_check_emp()
 	_check_missile_fighter_tactics()
 	_check_railgun()
-	_check_flak()
-	_check_pusher()
+	_check_fields_and_swarm()
 	_check_ship_effects()
 	_game._toggle_arena()
 	_check(_game.voyage.weapon.kind == 0, "The rescue scenario retains its kinetic weapon")
@@ -241,6 +241,7 @@ func _check_enemy() -> void:
 	enemy.deck.reset(true)
 	var hostile_hull := enemy.deck.hull.integrity
 	var local_hull := voyage.deck.hull.integrity
+	voyage.body.shield.online = false
 	enemy.heading = PI
 	enemy.position = voyage.ship_position + Vector2(55, 0)
 	enemy.velocity = Vector2(-120, 0)
@@ -410,6 +411,7 @@ func _check_missile() -> void:
 	var off_axis := voyage.add_test_enemy(Voyage.Opponent.FIGHTER)
 	target.position = voyage.ship_position + Vector2(195, 64)
 	target.heading = PI
+	target.body.shield.online = true
 	off_axis.position = voyage.ship_position + Vector2(0, 94)
 	_check(voyage.fire(), "The launcher fires a missile")
 	var missile := voyage.projectiles[0]
@@ -422,7 +424,18 @@ func _check_missile() -> void:
 		if missile.blast_time > 0.0:
 			break
 	_check(missile.blast_time > 0.0 and target.deck.hull.integrity < 100.0
-		and off_axis.deck.hull.integrity == Hull.HULL_MAX, "A collision detonates the missile before its fuse expires")
+		and off_axis.deck.hull.integrity == Hull.HULL_MAX and target.body.shield.charge == 100.0,
+		"The missile crosses the active field and detonates on the hull without draining it")
+
+	var hull := target.deck.hull.integrity
+	var far_side := target.body.position + Vector2(1, 0) * (target.body.shield_radius() + 81.0)
+	missile.position = far_side
+	Voyage.Weapons._explode(missile, voyage._weapon_targets())
+	var distant_drain := 100.0 - target.body.shield.charge
+	missile.position = far_side - Vector2(50, 0)
+	Voyage.Weapons._explode(missile, voyage._weapon_targets())
+	_check(distant_drain > 0.0 and 100.0 - target.body.shield.charge > distant_drain * 2.0
+		and target.deck.hull.integrity == hull, "An external blast falls off with distance and only hits the field")
 
 	voyage = _weapon_fixture(2)
 	_check(voyage.fire(), "A missile can launch without a target")
@@ -512,39 +525,85 @@ func _check_railgun() -> void:
 		"The rail bolt damages multiple compartments in order and exits to hit another ship")
 
 
-func _check_flak() -> void:
-	var voyage := _weapon_fixture(0)
-	var enemy := voyage.add_test_enemy(Voyage.Opponent.MISSILE_FIGHTER)
-	enemy.position = voyage.ship_position + Vector2(166, 0)
-	enemy.heading = PI
-	voyage.flight_computer = false
-	voyage.flak_enabled = true
-	voyage._fire_hostile(enemy)
-	_check(voyage.projectiles.size() == 1 and voyage.projectiles[0].hostile,
-		"The missile fighter can launch missiles for point defense practice")
-	var missile := voyage.projectiles[0]
-	voyage._advance_weapons(TICK)
-	_check(voyage.projectiles.size() == 1 and voyage.deck.power.energy == 100.0, "Point defense waits for the flight computer")
-	voyage.flight_computer = true
-	for frame in range(16):
+func _check_fields_and_swarm() -> void:
+	var voyage := _weapon_fixture(4)
+	var target := voyage.add_test_enemy(Voyage.Opponent.DRILL)
+	target.position = voyage.ship_position + Vector2(180, 0)
+	target.heading = PI
+	var field := target.body.shield
+	field.online = true
+	_check(voyage.fire(), "Rail launches into a strong shield")
+	for tick in range(14):
 		voyage._advance_weapons(TICK)
-		if missile.intercepted:
-			break
-	_check(missile.intercepted and voyage.deck.power.energy == 100.0 - Voyage.FLAK.energy_cost
-		and voyage.deck.hull.integrity == Hull.HULL_MAX, "The flak wave intercepts the missile without triggering blast damage")
-	voyage.flak_enabled = false
-
-
-func _check_pusher() -> void:
-	var voyage := _weapon_fixture(5)
-	var enemy := voyage.add_test_enemy(Voyage.Opponent.DRILL)
-	enemy.position = voyage.ship_position + Vector2(138, 13)
-	enemy.heading = PI
-	_check(voyage.fire(), "The impulse weapon generates a pulse")
-	for frame in range(24):
+	_check(field.charge == 62.0 and target.deck.hull.integrity == Hull.HULL_MAX, "A strong shield stops a rail shot")
+	field.charge = 49.0
+	voyage.weapon_cooldown = 0.0
+	voyage.deck.power.energy = 100.0
+	_check(voyage.fire(), "Rail launches into a weak shield")
+	for tick in range(14):
 		voyage._advance_weapons(TICK)
-	_check(enemy.velocity.x > 0.0 and absf(enemy.body.spin) > 0.1 and enemy.deck.hull.integrity == Hull.HULL_MAX - 7.0,
-		"An off-center impulse changes linear and angular velocity and deals slight damage")
+	_check(field.collapsed and field.charge == 0.0 and target.deck.hull.integrity <= Hull.HULL_MAX - 38.0,
+		"A weak shield collapses and rail damage reaches the hull without reduction")
+	field.advance(6.0)
+	_check(field.collapsed and field.charge == 40.0, "A collapsed shield charges under hull fire and remains offline")
+	field.advance(3.0)
+	_check(field.active() and field.charge == 100.0, "A collapsed shield only returns at full charge")
+
+	voyage.select_test_weapon(3)
+	voyage.weapon_cooldown = 0.0
+	voyage.deck.power.energy = 100.0
+	var energy := target.deck.power.energy
+	_check(voyage.fire(), "EMP launches into an active field")
+	for tick in range(25):
+		voyage._advance_weapons(TICK)
+	_check(field.collapsed and field.charge == 0.0 and field.emp_time > 0.0 and target.deck.power.energy == energy,
+		"An active field absorbs EMP and loses its charge instead of exposing the modules")
+	field.advance(2.0)
+	_check(field.charge == 0.0, "EMP pauses recharge during suppression")
+
+	_game._reset()
+	_check(voyage.deck.load_layout(Deck.RESCUE_LAYOUT).is_empty(), "Load the compact player deck")
+	voyage.set_test_damage(false, true)
+	_check(not voyage.body.shield.active(), "An unstaffed field cannot absorb fire")
+	voyage.deck.assign_order(1, voyage.deck.shield_tile)
+	for tick in range(420):
+		voyage.deck._physics_process(TICK)
+		voyage._physics_process(TICK)
+	_check(voyage.body.shield.active(), "Posting an operator brings the field online")
+
+	var carrier := voyage.add_test_enemy(Voyage.Opponent.SWARM)
+	var drone_shots := 0
+	for tick in range(1150):
+		voyage._physics_process(TICK)
+		drone_shots += voyage.drones.filter(func(drone: Voyage.Drone) -> bool: return drone.shot_requested).size()
+	_check(voyage.drones.size() == 6 and drone_shots > 8, "A carrier maintains a six-drone firing orbit")
+	_check(carrier.position.distance_to(voyage.ship_position) > 310.0 and voyage.drones.all(
+		func(drone: Voyage.Drone) -> bool: return absf(drone.body.position.distance_to(voyage.ship_position)
+			- Voyage.Drone.ORBIT_RADIUS) < 40.0), "Drones settle into orbit while their carrier keeps its distance")
+	if not voyage.drones.is_empty():
+		voyage.drones[0].strike(100.0)
+	for tick in range(120):
+		voyage._physics_process(TICK)
+	_check(voyage.drones.size() == 6, "The carrier replaces a destroyed drone")
+	carrier.deck.apply_hit(Hull.HULL_MAX, 0.0)
+	for tick in range(245):
+		voyage._physics_process(TICK)
+	_check(voyage.drones.is_empty() and voyage.wrecks.size() == 1 and voyage.wrecks[0].collider != null,
+		"Orphan drones detonate, and only the large carrier leaves a persistent collider")
+	if voyage.wrecks.size() == 1:
+		var obstacle := voyage.wrecks[0].collider
+		obstacle.position = voyage.ship_position + Vector2(43, 0)
+		obstacle.velocity = Vector2.ZERO
+		voyage.heading = 0.0
+		voyage.velocity = Vector2(65, 0)
+		voyage._advance_wrecks(TICK)
+		_check(voyage.velocity.x < 65.0 and obstacle.velocity.x > 0.0,
+			"An impact transfers momentum between the player and a large wreck")
+		var fighter := voyage.add_test_enemy(Voyage.Opponent.FIGHTER)
+		fighter.position = obstacle.position - Vector2(170, 13)
+		fighter.obstacles = voyage._wreck_colliders()
+		_check(fighter._avoid_wrecks(Vector2(160, 0)).y < 0.0,
+			"A fighter plans a detour on the clear side of a wreck")
 
 
 func _check(value: bool, message: String) -> void:

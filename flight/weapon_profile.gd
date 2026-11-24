@@ -11,7 +11,7 @@ extends Resource
 @export var crew_damage := 9.0
 @export_range(0.0, 45.0, 0.5) var damaged_spread_degrees := 18.0
 
-enum Kind { KINETIC, LASER, MISSILE, EMP, RAIL, FLAK, PUSH }
+enum Kind { KINETIC, LASER, MISSILE, EMP, RAIL }
 
 @export var kind := Kind.KINETIC
 @export var title := "Кинетика"
@@ -41,13 +41,3 @@ enum Kind { KINETIC, LASER, MISSILE, EMP, RAIL, FLAK, PUSH }
 @export_range(1, 6000, 1) var rail_speed := 1550.0
 @export_range(1, 16, 1) var rail_penetration := 5
 @export_range(0.0, 1.0, 0.01) var rail_retention := 0.74
-
-@export_group("Point defense")
-@export_range(1, 600, 1) var flak_range := 150.0
-@export_range(1, 175, 1) var flak_angle := 80.0
-@export_range(1, 6000, 1) var flak_speed := 1000.0
-
-@export_group("Impulse")
-@export_range(1, 1500, 1) var push_range := 250.0
-@export_range(1, 3000, 1) var push_speed := 475.0
-@export_range(0, 12000, 1) var push_impulse := 1580.0

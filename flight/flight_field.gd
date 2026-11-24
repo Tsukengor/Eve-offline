@@ -18,8 +18,9 @@ const MISSILE := preload("res://assets/flight/guided_missile.png")
 const EXPLOSION := preload("res://assets/flight/missile_blast.png")
 const EMP_SPARK := preload("res://assets/flight/emp_spark.png")
 const RAIL_BOLT := preload("res://assets/flight/rail_bolt.png")
-const FLAK_BURST := preload("res://assets/flight/flak_burst.png")
-const IMPULSE_WAVE := preload("res://assets/flight/impulse_wave.png")
+const DRONE := preload("res://assets/flight/swarm_drone.png")
+const SHIELD := preload("res://assets/flight/shield_field.png")
+const SHIELD_HIT := preload("res://assets/flight/shield_hit.png")
 const Profile = preload("res://flight/weapon_profile.gd")
 const REACTOR := preload("res://assets/deck/reactor.png")
 const ROOM_DAMAGE := preload("res://assets/deck/room_damage.png")
@@ -28,7 +29,7 @@ const STARFIELD := preload("res://assets/flight/starfield.png")
 const SCAN_FLOORS := {
 	"B": Color("#36526b"), "E": Color("#3c4a5d"), "S": Color("#365450"),
 	"C": Color("#243447"), "W": Color("#583c51"), "L": Color("#34566a"), "R": Color("#554b3c"),
-	"G": Color("#505244"),
+	"G": Color("#505244"), "H": Color("#325363"),
 }
 
 const GRID_PITCH := 84.0
@@ -57,6 +58,8 @@ func _draw() -> void:
 	_draw_wrecks(size)
 	for hostile in voyage.enemies:
 		_draw_enemy(hostile, size)
+	for drone in voyage.drones:
+		_draw_drone(drone, size)
 	_draw_projectiles(size)
 	_draw_ship()
 	_draw_vector(center, voyage.velocity * 0.48, VELOCITY_COLOR, "v", false)
@@ -135,11 +138,42 @@ func _draw_enemy(enemy: Voyage.EnemyShip, size: Vector2) -> void:
 			for mount in enemy.weapon.mounts:
 				_sprite(MUZZLE_FLASH, mount, 19.0, Color(1, 0.7, 0.5, enemy.flash_remaining / Voyage.FLASH_SECONDS))
 		draw_set_transform(Vector2.ZERO)
+		_draw_shield(enemy.body)
 		draw_rect(Rect2(point + Vector2(-24, 43), Vector2(48, 3)), Color("#30465c"))
 		draw_rect(Rect2(point + Vector2(-24, 43), Vector2(48 * condition, 3)), danger)
-		_centered(enemy.call_sign, point + Vector2(0, 64), danger)
+		if enemy.body.shield != null:
+			draw_rect(Rect2(point + Vector2(-24, 49), Vector2(48, 2)), Color("#233b4f"))
+			var field := enemy.body.shield
+			var ratio := field.charge / Physics.Shield.CAPACITY
+			draw_rect(Rect2(point + Vector2(-24, 49), Vector2(48 * ratio, 2)), Color("#76ccf0") if field.active() else Color("#677d95"))
+		_centered(enemy.call_sign, point + Vector2(0, 65), danger)
 	if not Rect2(Vector2.ZERO, size).has_point(point):
 		_draw_station_bearing(size, point, enemy.call_sign, danger)
+
+
+func _draw_drone(drone: Voyage.Drone, size: Vector2) -> void:
+	var point := world_to_screen(drone.body.position)
+	if not Rect2(Vector2.ZERO, size).grow(20.0).has_point(point):
+		return
+	var tint := Color("#7a9cab") if drone.disabled_time > 0.0 else Color.WHITE
+	if drone.shutdown_time >= 0.0:
+		tint = tint.lerp(Color("#d68563"), 0.5 + sin(drone.shutdown_time * 17.0) * 0.4)
+	_draw_shell(DRONE, point, drone.body.heading, 25.0, tint)
+	if drone.hit_time > 0.0:
+		_effect_frame(HIT_FRAMES, mini(4, int((1.0 - drone.hit_time / 0.18) * 5.0)), point, 24.0)
+
+
+func _draw_shield(body: Physics.Body) -> void:
+	var field := body.shield
+	if field == null:
+		return
+	var point := world_to_screen(body.position)
+	var diameter := body.shield_radius() * 2.0
+	if field.active():
+		var strength := field.charge / Physics.Shield.CAPACITY
+		_sprite(SHIELD, point, diameter, Color(1.0, 1.0, 1.0, 0.40 + strength * 0.40))
+	if field.pulse > 0.0:
+		_sprite(SHIELD_HIT, point, diameter, Color(1.0, 1.0, 1.0, field.pulse / 0.28))
 
 
 func _draw_wrecks(size: Vector2) -> void:
@@ -190,20 +224,13 @@ func _draw_projectiles(size: Vector2) -> void:
 				draw_line(point, finish, Color("#f8dfff"), 1.0, true)
 			Profile.Kind.EMP:
 				_draw_emp_wave(projectile, point)
-			Profile.Kind.FLAK:
-				var distance := projectile.reach
-				var center := point + Vector2.from_angle(projectile.angle) * distance * 0.65
-				_draw_shell(FLAK_BURST, center, projectile.angle, maxf(6.0, distance * 1.15), Color(1, 1, 1, 0.88))
 			Profile.Kind.RAIL:
 				if visible_area.has_point(point):
 					_draw_shell(RAIL_BOLT, point, projectile.angle, 35.0)
-			Profile.Kind.PUSH:
-				if visible_area.has_point(point):
-					_draw_shell(IMPULSE_WAVE, point, projectile.angle, 36.0)
 			Profile.Kind.MISSILE:
 				if projectile.blast_time > 0.0:
-					var fraction: float = projectile.blast_time / (0.18 if projectile.intercepted else Voyage.Weapons.BLAST_SECONDS)
-					var diameter := 36.0 if projectile.intercepted else projectile.profile.missile_blast_radius * 2.0
+					var fraction: float = projectile.blast_time / Voyage.Weapons.BLAST_SECONDS
+					var diameter := projectile.profile.missile_blast_radius * 2.0
 					_sprite(EXPLOSION, point, diameter * lerpf(0.25, 0.92, 1.0 - fraction), Color(1, 1, 1, sqrt(fraction)))
 					draw_arc(point, diameter * 0.5 * lerpf(0.35, 1.0, 1.0 - fraction), 0, TAU, 48, Color(1, 0.62, 0.30, fraction * 0.7), 2.0, true)
 				elif visible_area.has_point(point):
@@ -248,6 +275,7 @@ func _draw_ship() -> void:
 	draw_set_transform(hull_center, body.heading + PI * 0.5)
 	_sprite(SHIP, Vector2.ZERO, 60, Color.WHITE if healthy else Color("#f8c599"))
 	draw_set_transform(Vector2.ZERO)
+	_draw_shield(body)
 
 
 func _draw_thrusters(body: Physics.Body) -> void:

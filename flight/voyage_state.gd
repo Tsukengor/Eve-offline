@@ -13,15 +13,19 @@ const RESCUE_MODEL = preload("res://flight/models/rescue_ship.tres")
 const STATION_MODEL = preload("res://flight/models/station.tres")
 const DRILL_SCENE := preload("res://flight/drill_enemy.tscn")
 const FIGHTER_SCENE := preload("res://flight/fighter_enemy.tscn")
+const SWARM_SCENE := preload("res://flight/swarm_enemy.tscn")
+const SwarmShip = preload("res://flight/swarm_enemy.gd")
+const Drone = preload("res://flight/drone.gd")
+const DRONE_WEAPON := preload("res://flight/drone_weapon.tres")
+const MISSILE_WEAPON := preload("res://flight/missile_weapon.tres")
 const TEST_WEAPONS := [
 	preload("res://flight/kinetic_weapon.tres"), preload("res://flight/laser_weapon.tres"),
-	preload("res://flight/missile_weapon.tres"), preload("res://flight/emp_weapon.tres"),
-	preload("res://flight/rail_weapon.tres"), preload("res://flight/push_weapon.tres"),
+	MISSILE_WEAPON, preload("res://flight/emp_weapon.tres"),
+	preload("res://flight/rail_weapon.tres"),
 ]
-const FLAK := preload("res://flight/flak_weapon.tres")
 const MAX_TEST_ENEMIES := 16
 
-enum Opponent { DRILL, FIGHTER, MISSILE_FIGHTER }
+enum Opponent { DRILL, FIGHTER, MISSILE_FIGHTER, SWARM }
 
 enum Stage { ANSWER_DISTRESS, DELIVER_SURVIVORS, COMPLETE }
 
@@ -40,11 +44,11 @@ const SYSTEMS := [
 const ROUTES := [Vector3i(HOME, DISTRESS, 2), Vector3i(DISTRESS, REFUGE, 3)]
 const FULL_FUEL := 5
 const RESCUE_COUNT := 8
-const DOCK_RANGE := 194.0
+const DOCK_RANGE := 264.0
 const DOCK_SPEED := 34.0
-const STATION_SIZE := 258.0
+const STATION_SIZE := 392.0
 const STATION_SPIN := 0.035
-const DOCK_RADIUS := 163.0
+const DOCK_RADIUS := 230.0
 const DOCK_SECONDS := 1.65
 const PASSIVE_ANGULAR_DECELERATION := 0.16
 const MAX_SPEED := 225.0
@@ -60,6 +64,8 @@ class Wreck:
 	var size: float
 	var age := 0.0
 	var broken_hull: bool
+	var collider: Physics.Body
+	var vanishes := false
 
 
 @export var weapon: WeaponProfile
@@ -104,8 +110,6 @@ var docked := false
 var manual_control := true
 var simulation_speed := 1.0
 var flight_computer := true
-var flak_enabled := false
-var flak_cooldown := 0.0
 var scan_enemy := false
 var incident_seen := false
 var notice := ""
@@ -115,6 +119,7 @@ var training_can_dock := false
 var training_hint := ""
 var training_step := 1
 var enemies: Array[EnemyShip] = []
+var drones: Array[Drone] = []
 var wrecks: Array[Wreck] = []
 var _wrecks_by_system: Dictionary[int, Array] = {}
 var enemy: EnemyShip:
@@ -136,6 +141,7 @@ func configure(ship_deck: DeckSimulation) -> void:
 	body.model = RESCUE_MODEL
 	body.passive_angular_deceleration = PASSIVE_ANGULAR_DECELERATION
 	body.power = deck.power
+	body.shield = Physics.Shield.new()
 	station_body.model = STATION_MODEL
 	station_body.fixed = true
 	station_body.spin = STATION_SPIN
@@ -159,6 +165,8 @@ func reset() -> void:
 	incident_seen = false
 	wrecks.clear()
 	_wrecks_by_system.clear()
+	body.shield.reset()
+	body.shield.online = false
 	_spawn_ship()
 	set_test_physics(test_mass, test_thrust)
 	set_test_damage(player_damage, enemy_damage)
@@ -215,6 +223,7 @@ func _clear_enemies() -> void:
 	for hostile in enemies:
 		hostile.queue_free()
 	enemies.clear()
+	drones.clear()
 	scan_index = 0
 	_spawn_slot = 0
 
@@ -232,17 +241,26 @@ func set_test_damage(player: bool, hostiles: bool) -> void:
 	deck.damage_enabled = not in_arena or player
 	for hostile in enemies:
 		hostile.deck.damage_enabled = not in_arena or hostiles
+	for drone in drones:
+		drone.damage_enabled = not in_arena or hostiles
 
 
 func _spawn_enemy(at: Vector2, kind: Opponent = Opponent.DRILL) -> EnemyShip:
-	var scene := DRILL_SCENE if kind == Opponent.DRILL else FIGHTER_SCENE
+	var scene := FIGHTER_SCENE
+	if kind == Opponent.DRILL:
+		scene = DRILL_SCENE
+	elif kind == Opponent.SWARM:
+		scene = SWARM_SCENE
 	var hostile := scene.instantiate() as EnemyShip
 	if kind == Opponent.MISSILE_FIGHTER:
-		hostile.weapon = TEST_WEAPONS[2]
+		hostile.weapon = MISSILE_WEAPON
 		hostile.call_sign = "Ракетчик"
 	hostile.position = at
 	hostile.heading = at.angle_to_point(ship_position)
 	add_child(hostile)
+	if hostile.deck.shield_tile != DeckSimulation.INVALID_CELL:
+		hostile.body.shield = Physics.Shield.new()
+		hostile.body.shield.online = false
 	hostile.deck.damage_enabled = not in_arena or enemy_damage
 	return hostile
 
@@ -254,7 +272,6 @@ func _spawn_ship() -> void:
 		projectile.queue_free()
 	projectiles.clear()
 	weapon_cooldown = 0.0
-	flak_cooldown = 0.0
 	flash_remaining = 0.0
 	angular_velocity = 0.0
 	body.active.clear()
@@ -319,10 +336,11 @@ func jump(destination: int) -> bool:
 	wrecks.assign(_wrecks_by_system.get(destination, []))
 	_spawn_ship()
 	enemies.clear()
+	drones.clear()
 	scan_index = 0
 	if destination == DISTRESS:
 		if not is_instance_valid(_cascade_enemy):
-			_cascade_enemy = _spawn_enemy(ship_position + Vector2.from_angle(heading) * 410.0)
+			_cascade_enemy = _spawn_enemy(ship_position + Vector2.from_angle(heading) * 260.0)
 		if is_instance_valid(_cascade_enemy) and not _cascade_enemy.disabled():
 			enemies.append(_cascade_enemy)
 	if destination == DISTRESS and not incident_seen:
@@ -450,6 +468,7 @@ func _physics_process(delta: float) -> void:
 		braking = Input.is_action_pressed("flight_brake")
 
 	var stabilized := manual_control and Input.is_action_pressed("flight_stabilize")
+	var changed_shield := body.shield.advance(delta, deck.operator_at(DeckSimulation.WorkPose.SHIELD) != null)
 	var changed_flight := advance_flight(delta, steering, forward_thrust, braking, stabilized)
 	var changed_battle := _advance_battle(delta)
 	if not in_arena:
@@ -461,7 +480,7 @@ func _physics_process(delta: float) -> void:
 	var changed_weapons := _advance_weapons(delta)
 	if firing and not channeling and fire():
 		return # Firing already notified the view.
-	if changed_flight or changed_weapons or changed_battle or changed_wrecks or not in_arena:
+	if changed_flight or changed_weapons or changed_battle or changed_wrecks or changed_shield or not in_arena:
 		changed.emit()
 
 
@@ -573,14 +592,12 @@ func _advance_weapons(delta: float) -> bool:
 	var updated := not projectiles.is_empty() or weapon_cooldown > 0.0 or flash_remaining > 0.0
 	weapon_cooldown = move_toward(weapon_cooldown, 0.0, delta)
 	flash_remaining = move_toward(flash_remaining, 0.0, delta)
-	flak_cooldown = move_toward(flak_cooldown, 0.0, delta)
 	if not projectiles.is_empty():
-		_try_flak()
 		var targets := _weapon_targets()
 		var station := null if in_arena else station_body
 		for index in range(projectiles.size() - 1, -1, -1):
 			var projectile := projectiles[index]
-			if not Weapons.tick(projectile, delta, targets, station, projectiles):
+			if not Weapons.tick(projectile, delta, targets, station):
 				if projectile == laser_beam:
 					_laser_spent = deck.power.energy <= 0.0
 					laser_beam = null
@@ -589,33 +606,12 @@ func _advance_weapons(delta: float) -> bool:
 	return updated
 
 
-func _try_flak() -> void:
-	if not flight_computer or not flak_enabled or flak_cooldown > 0.0 or docked or docking_time > 0.0:
-		return
-	if deck.disabled() or not deck.module_online(deck.weapons_tile) or not deck.power.can_spend(FLAK.energy_cost):
-		return
-	var mount := body.model.muzzle
-	mount.y = -FLAK.muzzle_offset
-	var origin := body.model.world_point(mount, ship_position, heading)
-	for missile in projectiles:
-		if not missile.hostile or missile.profile.kind != WeaponProfile.Kind.MISSILE or missile.blast_time > 0.0:
-			continue
-		var offset := missile.position - origin
-		if offset.length_squared() > FLAK.flak_range * FLAK.flak_range:
-			continue
-		if absf(angle_difference(heading, offset.angle())) > deg_to_rad(FLAK.flak_angle * 0.5):
-			continue
-		if _launch_shot(FLAK, body, mount, heading, false):
-			deck.power.spend(FLAK.energy_cost)
-			flak_cooldown = FLAK.cooldown
-			weapon_fired.emit(WeaponProfile.Kind.FLAK)
-		return
-
-
 func _weapon_targets() -> Array[Weapons.Target]:
 	var targets: Array[Weapons.Target] = [Weapons.Target.new(body, deck, false)]
 	for hostile in enemies:
 		targets.append(Weapons.Target.new(hostile.body, hostile.deck, true))
+	for drone in drones:
+		targets.append(Weapons.Target.new(drone.body, null, true, drone))
 	return targets
 
 
@@ -646,10 +642,13 @@ func _advance_battle(delta: float) -> bool:
 		body.active.clear()
 		notice = "Корабль потерян. Нажмите «Сброс»."
 		return true
-	if enemies.is_empty():
+	if enemies.is_empty() and drones.is_empty():
 		return false
+	var obstacles := _wreck_colliders()
 	for index in range(enemies.size() - 1, -1, -1):
 		var hostile := enemies[index]
+		if hostile.body.shield != null:
+			hostile.body.shield.advance(delta, hostile.deck.operator_at(DeckSimulation.WorkPose.SHIELD) != null)
 		hostile.hit_remaining = move_toward(hostile.hit_remaining, 0.0, delta)
 		if hostile.disabled():
 			if not in_training:
@@ -659,10 +658,14 @@ func _advance_battle(delta: float) -> bool:
 				hostile.queue_free()
 			enemies.remove_at(index)
 		elif not in_training:
+			hostile.obstacles = obstacles
 			hostile.advance(delta, ship_position, velocity)
 			if hostile.shot_requested:
 				_fire_hostile(hostile)
+			if hostile is SwarmShip:
+				_maybe_launch_drone(hostile)
 
+	_advance_drones(delta)
 	for index in range(enemies.size()):
 		var hostile := enemies[index]
 		_resolve_enemy_contact(hostile, delta)
@@ -671,6 +674,54 @@ func _advance_battle(delta: float) -> bool:
 			if hit != null:
 				Physics.resolve(hostile.body, enemies[other].body, hit, 0.18)
 	return true
+
+
+func _maybe_launch_drone(carrier: SwarmShip) -> void:
+	if carrier.launch_timer > 0.0 or not carrier.deck.weapons_are_manned():
+		return
+	var occupied: Array[int] = []
+	for drone in drones:
+		if drone.carrier_id == carrier.get_instance_id() and not drone.disabled():
+			occupied.append(drone.orbit_slot)
+	if occupied.size() >= SwarmShip.DRONE_LIMIT or not carrier.deck.power.spend(10.0):
+		return
+	var slot := 0
+	while slot in occupied:
+		slot += 1
+	var phase := carrier.orbit_phase + slot * TAU / SwarmShip.DRONE_LIMIT
+	var drone := Drone.new(carrier.position, phase)
+	drone.carrier_id = carrier.get_instance_id()
+	drone.orbit_slot = slot
+	drone.body.velocity = carrier.velocity
+	drone.damage_enabled = not in_arena or enemy_damage
+	drones.append(drone)
+	carrier.launch_timer = SwarmShip.LAUNCH_INTERVAL
+
+
+func _advance_drones(delta: float) -> void:
+	var carriers := {}
+	for hostile in enemies:
+		if hostile is SwarmShip:
+			carriers[hostile.get_instance_id()] = true
+	for index in range(drones.size() - 1, -1, -1):
+		var drone := drones[index]
+		if not carriers.has(drone.carrier_id):
+			drone.shutdown_time = 3.0 if drone.shutdown_time < 0.0 else move_toward(drone.shutdown_time, 0.0, delta)
+		if drone.disabled() or drone.shutdown_time == 0.0:
+			var wreck := Wreck.new()
+			wreck.position = drone.body.position
+			wreck.velocity = drone.body.velocity * 0.45
+			wreck.rotation = drone.body.heading + PI * 0.5
+			wreck.spin = 0.7
+			wreck.vanishes = true
+			wreck.broken_hull = true
+			wreck.size = 23.0
+			wrecks.append(wreck)
+			drones.remove_at(index)
+			continue
+		drone.advance(delta, ship_position, velocity, ship_position)
+		if drone.shot_requested and _launch_shot(DRONE_WEAPON, drone.body, drone.body.model.muzzle, drone.body.heading, true):
+			weapon_fired.emit(WeaponProfile.Kind.KINETIC)
 
 
 func _add_wreck(hostile: EnemyShip) -> void:
@@ -682,15 +733,54 @@ func _add_wreck(hostile: EnemyShip) -> void:
 	wreck.broken_hull = hostile.deck.hull.integrity <= 0.0
 	wreck.texture = hostile.hull_wreck if wreck.broken_hull else hostile.crew_derelict
 	wreck.size = hostile.sprite_size
+	wreck.collider = Physics.Body.new()
+	wreck.collider.model = hostile.body.model
+	wreck.collider.position = hostile.body.position
+	wreck.collider.velocity = wreck.velocity
+	wreck.collider.heading = hostile.body.heading
+	wreck.collider.spin = wreck.spin
 	wrecks.append(wreck)
 
 
-func _advance_wrecks(delta: float) -> bool:
+func _wreck_colliders() -> Array[Physics.Body]:
+	var obstacles: Array[Physics.Body] = []
 	for wreck in wrecks:
+		if wreck.collider != null:
+			obstacles.append(wreck.collider)
+	return obstacles
+
+
+func _advance_wrecks(delta: float) -> bool:
+	var updated := not wrecks.is_empty()
+	var previous_velocity := velocity
+	for index in range(wrecks.size() - 1, -1, -1):
+		var wreck := wrecks[index]
 		wreck.age += delta
-		wreck.position += wreck.velocity * delta
-		wreck.rotation += wreck.spin * delta
-	return not wrecks.is_empty()
+		if wreck.vanishes:
+			wreck.position += wreck.velocity * delta
+			if wreck.age >= 0.84:
+				wrecks.remove_at(index)
+			continue
+		var obstacle := wreck.collider
+		obstacle.position += obstacle.velocity * delta
+		obstacle.heading = wrapf(obstacle.heading + obstacle.spin * delta, -PI, PI)
+		if not in_arena:
+			_resolve_wreck_contact(station_body, obstacle)
+		_resolve_wreck_contact(body, obstacle)
+		for hostile in enemies:
+			_resolve_wreck_contact(hostile.body, obstacle)
+		wreck.velocity = obstacle.velocity
+		wreck.position = obstacle.model.world_point(Vector2.ZERO, obstacle.position, obstacle.heading)
+		wreck.rotation = obstacle.heading + PI * 0.5
+	if delta > 0.0:
+		acceleration += (velocity - previous_velocity) / delta
+	return updated
+
+
+func _resolve_wreck_contact(ship: Physics.Body, obstacle: Physics.Body) -> void:
+	var contact := Physics.contact(ship, obstacle)
+	if contact != null:
+		Physics.resolve(ship, obstacle, contact, 0.16)
 
 
 func _fire_hostile(hostile: EnemyShip) -> void:
@@ -724,7 +814,11 @@ func _resolve_enemy_contact(hostile: EnemyShip, delta: float) -> void:
 	acceleration += (velocity - before) / delta
 	if hostile.can_ram() and hit.closing_speed >= 12.0:
 		var side := (hit.point - ship_position).rotated(-heading - PI * 0.5)
-		deck.apply_hit(hostile.ram_damage, 0.35, 0.0, side)
+		if body.shield.active():
+			if deck.damage_enabled:
+				body.shield.absorb(hostile.ram_damage)
+		else:
+			deck.apply_hit(hostile.ram_damage, 0.35, 0.0, side)
 		hostile.on_ram(hit.point)
 		notice = "Удар бура. Проверьте отсеки на палубе."
 

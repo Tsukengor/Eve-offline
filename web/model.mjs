@@ -2,11 +2,11 @@ export const LIMITS = {width: 24, height: 18};
 export const ROOMS = {
   C: ['Коридор', '#233a52'], B: ['Мостик', '#254664'], E: ['Двигатели', '#553e3a'],
   S: ['Шлюз', '#285049'], W: ['Вооружение', '#51415d'], L: ['Кислород', '#275368'], R: ['Реактор', '#574a35'],
-  G: ['Грузовой отсек', '#505244'],
+  G: ['Грузовой отсек', '#505244'], H: ['Щит', '#325363'],
 };
 export const MODULES = {
   bridge: ['B', 'Мостик'], engine: ['E', 'Двигатели'], airlock: ['S', 'Шлюз'],
-  weapons: ['W', 'Вооружение'], life_support: ['L', 'Кислород'], reactor: ['R', 'Реактор'],
+  weapons: ['W', 'Вооружение'], life_support: ['L', 'Кислород'], reactor: ['R', 'Реактор'], shield: ['H', 'Пост щита'],
 };
 export const STEPS = [[0,-1],[-1,0],[1,0],[0,1]];
 export const WEAPON_FIELDS = {
@@ -24,11 +24,8 @@ export const WEAPON_TYPES = {
   missile: 'Самонаводящаяся ракета',
   emp: 'Излучатель ЭМИ',
   rail: 'Рельсотрон',
-  flak: 'Осколочная ПВО',
-  push: 'Импульсный толкатель',
 };
 const SPECIAL_FIELDS = {
-  kinetic: {},
   laser: {
     laser_energy_per_second: ['Энергия за секунду луча', 1, 100, 0.1, 42],
     laser_ticks_per_second: ['Тиков урона в секунду', 10, 15, 1, 12],
@@ -55,24 +52,13 @@ const SPECIAL_FIELDS = {
     rail_penetration: ['Максимум пробиваемых отсеков', 1, 16, 1, 5],
     rail_retention: ['Доля урона после пробития отсека', 0, 1, 0.01, 0.74],
   },
-  flak: {
-    flak_speed: ['Скорость осколочного фронта', 1, 6000, 1, 1000],
-    flak_angle: ['Полный угол веера, °', 1, 175, 1, 80],
-    flak_range: ['Дальность перехвата', 1, 600, 1, 150],
-  },
-  push: {
-    push_speed: ['Скорость волны', 1, 3000, 1, 475],
-    push_range: ['Дальность волны', 1, 1500, 1, 250],
-    push_impulse: ['Сила импульса', 0, 12000, 1, 1580],
-  },
+
 };
 const PRESET = {
   laser: {damage:36,crew_damage:5,breach_chance:0.03},
   missile: {damage:59,crew_damage:16,breach_chance:0.4,energy_cost:26,cooldown:2},
   emp: {damage:0,crew_damage:0,breach_chance:0,energy_cost:30,cooldown:2.6},
   rail: {damage:38,crew_damage:7,breach_chance:0.3,energy_cost:46,cooldown:3.1},
-  flak: {damage:0,crew_damage:0,breach_chance:0,energy_cost:9,cooldown:0.8},
-  push: {damage:7,crew_damage:0,breach_chance:0,energy_cost:21,cooldown:1.7},
 };
 export function weaponFields(type) {
   const fields = {...WEAPON_FIELDS,...SPECIAL_FIELDS[type]};
@@ -82,7 +68,7 @@ export function weaponFields(type) {
     for(const [key,label] of Object.entries({damage:'Урон отсеку в секунду',crew_damage:'Урон экипажу в секунду',breach_chance:'Шанс пробоины за секунду'}))
       fields[key] = [label,...fields[key].slice(1)];
   }
-  if (['emp','flak'].includes(type)) for(const key of ['damage','crew_damage','breach_chance']) delete fields[key];
+  if (type === 'emp') for(const key of ['damage','crew_damage','breach_chance']) delete fields[key];
   return fields;
 }
 const coords = (p) => Array.isArray(p) && p.length === 2 && p.every(n => Number.isInteger(n) && n >= -1 && n <= LIMITS.width);
@@ -102,7 +88,7 @@ export function inspectLayout(data) {
   const rows = data.plan;
   const width = rows?.[0]?.length;
   if (!Array.isArray(rows) || !rows.length || rows.length > LIMITS.height || !width || width > LIMITS.width ||
-    rows.some(row => typeof row !== 'string' || row.length !== width || /[^.CBESWLRG]/.test(row)) ||
+    rows.some(row => typeof row !== 'string' || row.length !== width || /[^.CBESWLRGH]/.test(row)) ||
     !data.modules || typeof data.modules !== 'object' || Array.isArray(data.modules) || !Array.isArray(data.edges)) {
     return {errors:['Проверьте размеры и содержимое сетки, модулей и границ.']};
   }
@@ -117,6 +103,7 @@ export function inspectLayout(data) {
   const equipment = [];
   for (const [key,[kind,label]] of Object.entries(MODULES)) {
     const point = data.modules[key];
+    if (key === 'shield' && !Object.hasOwn(data.modules, key)) continue;
     if (!coords(point) || at(data,point) !== kind) errors.push('Установите модуль «'+label+'».');
     else equipment.push(point);
   }

@@ -4,18 +4,41 @@ const Projectile = preload("res://flight/projectile.gd")
 const Profile = preload("res://flight/weapon_profile.gd")
 const Physics = preload("res://flight/ship_physics.gd")
 const Deck = preload("res://deck/deck_simulation.gd")
+const Drone = preload("res://flight/drone.gd")
 const BLAST_SECONDS := 0.34
 
 
 class Target:
 	var body: Physics.Body
 	var deck: Deck
+	var drone: Drone
 	var hostile: bool
 
-	func _init(ship: Physics.Body, interior: Deck, enemy: bool) -> void:
+	func _init(ship: Physics.Body, interior: Deck, enemy: bool, unmanned: Drone = null) -> void:
 		body = ship
 		deck = interior
+		drone = unmanned
 		hostile = enemy
+
+	func disabled() -> bool:
+		return deck.disabled() if deck != null else drone.disabled()
+
+	func damage_enabled() -> bool:
+		return deck.damage_enabled if deck != null else drone.damage_enabled
+
+	func has_field() -> bool:
+		return body.shield != null and body.shield.active()
+
+	func strike(damage: float, breach: float, crew: float, side: Vector2,
+			tile := Deck.INVALID_CELL, announce := true) -> void:
+		if deck != null:
+			deck.apply_hit(damage, breach, crew, side, tile, announce)
+		else:
+			drone.strike(damage)
+
+	func absorb(damage: float) -> void:
+		if damage_enabled():
+			body.shield.absorb(damage)
 
 
 static func begin(shot: Projectile, profile: Profile, shooter: Physics.Body, mount: Vector2, angle: float,
@@ -37,28 +60,21 @@ static func begin(shot: Projectile, profile: Profile, shooter: Physics.Body, mou
 			shot.velocity = Vector2.from_angle(angle) * profile.missile_speed
 			var best := INF
 			for target in targets:
-				if target.hostile == hostile or target.deck.disabled():
+				if target.hostile == hostile or target.disabled():
 					continue
 				var offset := target.body.position - shooter.position
 				var distance := offset.length_squared()
 				if distance < best and absf(angle_difference(shooter.heading, offset.angle())) <= deg_to_rad(profile.missile_lock_angle * 0.5):
 					shot.target_body = target.body
-					shot.target_deck = target.deck
 					best = distance
 		Profile.Kind.EMP:
 			shot.remaining = profile.emp_range / profile.emp_speed
 		Profile.Kind.RAIL:
 			shot.velocity = Vector2.from_angle(angle) * profile.rail_speed
 			shot.penetration_left = profile.rail_penetration
-		Profile.Kind.FLAK:
-			shot.remaining = profile.flak_range / profile.flak_speed
-		Profile.Kind.PUSH:
-			shot.velocity = Vector2.from_angle(angle) * profile.push_speed
-			shot.remaining = profile.push_range / profile.push_speed
 
 
-static func tick(shot: Projectile, delta: float, targets: Array[Target], station: Physics.Body,
-		projectiles: Array[Projectile]) -> bool:
+static func tick(shot: Projectile, delta: float, targets: Array[Target], station: Physics.Body) -> bool:
 	if shot.blast_time > 0.0:
 		shot.blast_time = move_toward(shot.blast_time, 0.0, delta)
 		return shot.blast_time > 0.0
@@ -69,8 +85,6 @@ static func tick(shot: Projectile, delta: float, targets: Array[Target], station
 			_emp(shot, delta, targets)
 		Profile.Kind.RAIL:
 			return _rail(shot, delta, targets, station)
-		Profile.Kind.FLAK:
-			_flak(shot, delta, projectiles)
 		_:
 			return _moving_shot(shot, delta, targets, station)
 	return shot.remaining > 0.0
@@ -78,10 +92,14 @@ static func tick(shot: Projectile, delta: float, targets: Array[Target], station
 
 static func _moving_shot(shot: Projectile, delta: float, targets: Array[Target], station: Physics.Body) -> bool:
 	var missile := shot.profile.kind == Profile.Kind.MISSILE
-	if missile and is_instance_valid(shot.target_deck) and not shot.target_deck.disabled():
-		var desired := shot.position.angle_to_point(shot.target_body.position)
-		shot.angle = rotate_toward(shot.angle, desired, deg_to_rad(shot.profile.missile_turn_rate) * delta)
-		shot.velocity = Vector2.from_angle(shot.angle) * shot.profile.missile_speed
+	if missile and shot.target_body != null:
+		for target in targets:
+			if target.body != shot.target_body or target.disabled():
+				continue
+			var desired := shot.position.angle_to_point(shot.target_body.position)
+			shot.angle = rotate_toward(shot.angle, desired, deg_to_rad(shot.profile.missile_turn_rate) * delta)
+			shot.velocity = Vector2.from_angle(shot.angle) * shot.profile.missile_speed
+			break
 	var before := shot.position
 	shot.advance(delta)
 	var hit := _trace(shot, before, shot.position, targets, station, missile)
@@ -93,9 +111,10 @@ static func _moving_shot(shot: Projectile, delta: float, targets: Array[Target],
 	if not hit.is_empty():
 		if hit.has("target"):
 			var target: Target = hit.target
-			if shot.profile.kind == Profile.Kind.PUSH:
-				target.body.apply_impulse(shot.velocity.normalized() * shot.profile.push_impulse, hit.point)
-			target.deck.apply_hit(shot.damage, shot.breach_chance, shot.crew_damage, _side(target, hit.point, shot.velocity))
+			if hit.field:
+				target.absorb(shot.damage)
+			else:
+				target.strike(shot.damage, shot.breach_chance, shot.crew_damage, _side(target, hit.point, shot.velocity))
 		return false
 	return shot.remaining > 0.0
 
@@ -122,6 +141,8 @@ static func _laser(shot: Projectile, delta: float, targets: Array[Target], stati
 	for target in targets:
 		if target.hostile != shot.hostile:
 			extent = _beam_extent(shot.position, forward, target.body.outline(), extent)
+			if target.has_field():
+				extent = maxf(extent, (target.body.position - shot.position).dot(forward) + target.body.shield_radius() + 1.0)
 	var hit := _trace(shot, shot.position, shot.position + forward * extent, targets, station)
 	shot.beam_blocked = not hit.is_empty()
 	if shot.beam_blocked:
@@ -137,14 +158,19 @@ static func _laser(shot: Projectile, delta: float, targets: Array[Target], stati
 	var side := _side(target, hit.point, forward)
 	if ticks == 0:
 		return source.power.energy > 0.0
-	var new_contact := target.body != shot.contact_body
+	var new_contact: bool = target.body != shot.contact_body or shot.contact_field != hit.field
 	if new_contact:
 		shot.contact_body = target.body
-		shot.contact_tile = target.deck._impact_cell(side)
+		shot.contact_field = hit.field
+		shot.contact_tile = target.deck._impact_cell(side) if target.deck != null and not hit.field else Deck.INVALID_CELL
 	var chance := 1.0 - pow(1.0 - shot.breach_chance, interval)
 	for tick_index in range(ticks):
-		target.deck.apply_hit(shot.damage * interval, chance, shot.crew_damage * interval, side, shot.contact_tile,
-			new_contact and tick_index == 0)
+		if hit.field:
+			if target.body.shield.active():
+				target.absorb(shot.damage * interval * 0.25)
+		else:
+			target.strike(shot.damage * interval, chance, shot.crew_damage * interval, side, shot.contact_tile,
+				new_contact and tick_index == 0)
 	return source.power.energy > 0.0
 
 
@@ -157,15 +183,21 @@ static func _beam_extent(start: Vector2, direction: Vector2, polygon: PackedVect
 static func _explode(shot: Projectile, targets: Array[Target]) -> void:
 	shot.blast_time = BLAST_SECONDS
 	for target in targets:
-		if target.deck.disabled():
+		if target.disabled():
 			continue
+		if target.has_field():
+			var edge_distance := shot.position.distance_to(target.body.position) - target.body.shield_radius()
+			if edge_distance >= 0.0:
+				if edge_distance < shot.profile.missile_blast_radius:
+					target.absorb(shot.damage * (1.0 - edge_distance / shot.profile.missile_blast_radius))
+				continue
 		var nearest := _closest_on_outline(shot.position, target.body.outline())
 		var distance := shot.position.distance_to(nearest)
 		if distance >= shot.profile.missile_blast_radius:
 			continue
 		var strength := 1.0 - distance / shot.profile.missile_blast_radius
 		var side := _side(target, nearest, shot.velocity)
-		target.deck.apply_hit(shot.damage * strength, shot.breach_chance * strength, shot.crew_damage * strength, side)
+		target.strike(shot.damage * strength, shot.breach_chance * strength, shot.crew_damage * strength, side)
 
 
 static func _emp(shot: Projectile, delta: float, targets: Array[Target]) -> void:
@@ -175,18 +207,27 @@ static func _emp(shot: Projectile, delta: float, targets: Array[Target]) -> void
 	shot.reach = minf(shot.profile.emp_range, previous + shot.profile.emp_speed * step)
 	var half_angle := deg_to_rad(shot.profile.emp_angle * 0.5)
 	for target in targets:
-		if target.hostile == shot.hostile or target.deck.disabled() or shot.affected.has(target.body):
+		if target.hostile == shot.hostile or target.disabled() or shot.affected.has(target.body):
 			continue
-		var contact: Variant = _sector_front(shot.position, shot.angle, half_angle, target.body.outline(), previous, shot.reach)
+		var shielded := target.has_field()
+		var outline := _field_outline(target.body) if shielded else target.body.outline()
+		var contact: Variant = _sector_front(shot.position, shot.angle, half_angle, outline, previous, shot.reach)
 		if contact == null:
 			continue
 		var closest: Vector2 = contact
 		var distance := closest.distance_to(shot.position)
 		shot.affected[target.body] = true
 		var strength := lerpf(1.0, shot.profile.emp_edge_strength, distance / shot.profile.emp_range)
-		target.deck.apply_emp(shot.profile.emp_energy_drain * strength, shot.profile.emp_disable_duration * strength,
-			ceili(shot.profile.emp_systems * strength), _side(target, closest, Vector2.from_angle(shot.angle)),
-			shot.profile.emp_recovery_suppression * strength)
+		if not target.damage_enabled():
+			continue
+		if shielded:
+			target.body.shield.suppress()
+		elif target.deck != null:
+			target.deck.apply_emp(shot.profile.emp_energy_drain * strength, shot.profile.emp_disable_duration * strength,
+				ceili(shot.profile.emp_systems * strength), _side(target, closest, Vector2.from_angle(shot.angle)),
+				shot.profile.emp_recovery_suppression * strength)
+		else:
+			target.drone.disabled_time = shot.profile.emp_disable_duration * strength
 
 
 # Test the moving front against the part of the hull inside the wedge, including its two radial edges.
@@ -221,27 +262,6 @@ static func _sector_front(origin: Vector2, angle: float, half: float, polygon: P
 	return origin + origin.direction_to(nearest) * previous if min_distance < previous else nearest
 
 
-static func _flak(shot: Projectile, delta: float, projectiles: Array[Projectile]) -> void:
-	var step := minf(delta, shot.remaining)
-	shot.remaining -= step
-	var previous := shot.reach
-	shot.reach = minf(shot.profile.flak_range, previous + step * shot.profile.flak_speed)
-	var half := deg_to_rad(shot.profile.flak_angle * 0.5)
-	for missile in projectiles:
-		if missile.profile.kind != Profile.Kind.MISSILE or missile.hostile == shot.hostile or missile.blast_time > 0.0:
-			continue
-		var offset := missile.position - shot.position
-		var distance := offset.length()
-		if distance > shot.reach or distance < previous - missile.velocity.length() * step - 2.0:
-			continue
-		if absf(angle_difference(shot.angle, offset.angle())) > half:
-			continue
-		# Interception shows a small flash without running the missile's area-damage routine.
-		missile.intercepted = true
-		missile.remaining = 0.0
-		missile.blast_time = 0.18
-
-
 static func _rail(shot: Projectile, delta: float, targets: Array[Target], station: Physics.Body) -> bool:
 	var start := shot.position
 	shot.advance(delta)
@@ -251,8 +271,12 @@ static func _rail(shot: Projectile, delta: float, targets: Array[Target], statio
 		finish = station_hit
 	var crossings: Array[Dictionary] = []
 	for target in targets:
-		if target.hostile == shot.hostile or target.deck.disabled():
+		if target.hostile == shot.hostile or target.disabled():
 			continue
+		if target.has_field():
+			var contact: Variant = _field_entry(start, finish, target.body)
+			if contact != null:
+				crossings.append({"target": target, "field": true, "distance": start.distance_squared_to(contact)})
 		var outline := target.body.outline()
 		var entry: Variant = Physics.segment_hit(start, finish, outline)
 		if entry == null:
@@ -260,17 +284,26 @@ static func _rail(shot: Projectile, delta: float, targets: Array[Target], statio
 		var exit_point: Vector2 = Physics.segment_hit(finish, start, outline)
 		var visited: Dictionary = shot.penetrated.get(target.body, {})
 		shot.penetrated[target.body] = visited
-		_rail_cells(target, entry, exit_point, start, visited, crossings)
+		if target.deck == null:
+			crossings.append({"target": target, "distance": start.distance_squared_to(entry), "tile": Deck.INVALID_CELL})
+		else:
+			_rail_cells(target, entry, exit_point, start, visited, crossings)
 	crossings.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a.distance < b.distance)
 	for crossing in crossings:
 		var target: Target = crossing.target
+		if crossing.get("field", false):
+			if target.body.shield.charge >= Physics.Shield.CAPACITY * 0.5:
+				target.absorb(shot.damage)
+				return false
+			target.absorb(Physics.Shield.CAPACITY)
+			continue
 		var visited := shot.penetrated[target.body]
-		var room: int = target.deck.hull.room_at[crossing.tile]
+		var room: int = target.deck.hull.room_at[crossing.tile] if target.deck != null else 0
 		if visited.has(room):
 			continue
 		visited[room] = true
 		var side := _side(target, start, shot.velocity)
-		target.deck.apply_hit(shot.damage, shot.breach_chance, shot.crew_damage, side, crossing.tile)
+		target.strike(shot.damage, shot.breach_chance, shot.crew_damage, side, crossing.tile)
 		shot.penetration_left -= 1
 		if shot.penetration_left <= 0:
 			return false
@@ -325,13 +358,30 @@ static func _trace(shot: Projectile, start: Vector2, finish: Vector2, targets: A
 			best = start.distance_squared_to(point)
 			result = {"point": point}
 	for target in targets:
-		if target.body == shot.shooter or target.deck.disabled() or (not friendly and target.hostile == shot.hostile):
+		if target.body == shot.shooter or target.disabled() or (not friendly and target.hostile == shot.hostile):
 			continue
-		var point: Variant = Physics.segment_hit(start, finish, target.body.outline())
+		var shield: Variant = _field_entry(start, finish, target.body) if not friendly and target.has_field() else null
+		var point: Variant = shield if shield != null else Physics.segment_hit(start, finish, target.body.outline())
 		if point != null and start.distance_squared_to(point) < best:
 			best = start.distance_squared_to(point)
-			result = {"point": point, "target": target}
+			result = {"point": point, "target": target, "field": shield != null}
 	return result
+
+
+static func _field_entry(start: Vector2, finish: Vector2, body: Physics.Body) -> Variant:
+	var radius := body.shield_radius()
+	if start.distance_squared_to(body.position) < radius * radius:
+		return null
+	var fraction := Geometry2D.segment_intersects_circle(start, finish, body.position, radius)
+	return start.lerp(finish, fraction) if fraction >= 0.0 else null
+
+
+static func _field_outline(body: Physics.Body) -> PackedVector2Array:
+	var points := PackedVector2Array()
+	var radius := body.shield_radius()
+	for index in range(24):
+		points.append(body.position + Vector2.from_angle(TAU * index / 24.0) * radius)
+	return points
 
 
 static func _closest_on_outline(point: Vector2, polygon: PackedVector2Array) -> Vector2:

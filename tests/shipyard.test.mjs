@@ -5,15 +5,15 @@ import {edgeKey,fresh,inspectLayout,prune,validWeapon,weaponDefault,upgradeWeapo
 
 const layout = (name) => JSON.parse(readFileSync(new URL('../deck/layouts/'+name+'.json',import.meta.url),'utf8'));
 
-test('the editor accepts the three layouts shipped with Godot',()=>{
-  for (const name of ['rescue','drill','fighter']) assert.deepEqual(inspectLayout(layout(name)).errors,[]);
+test('the editor accepts the layouts shipped with Godot',()=>{
+  for (const name of ['rescue','drill','fighter','swarm']) assert.deepEqual(inspectLayout(layout(name)).errors,[]);
 });
 
 test('an exterior hatch is valid and disappears when its floor is erased',()=>{
   const data=layout('rescue');
-  data.edges.push({kind:'hatch',a:[1,1],b:[0,1]});
+  data.edges.push({kind:'hatch',a:[3,1],b:[3,0]});
   assert.deepEqual(inspectLayout(data).errors,[]);
-  data.plan[1]=data.plan[1].slice(0,1)+'.'+data.plan[1].slice(2);
+  data.plan[1]=data.plan[1].slice(0,3)+'.'+data.plan[1].slice(4);
   prune(data);
   assert.ok(!data.edges.some(edge=>edge.kind==='hatch'));
   assert.deepEqual(inspectLayout(data).errors,[]);
@@ -21,7 +21,7 @@ test('an exterior hatch is valid and disappears when its floor is erased',()=>{
 
 test('disconnected compartments, duplicate edges and empty decks cannot export as playable layouts',()=>{
   const data=layout('rescue');
-  data.edges.shift();
+  data.edges = data.edges.filter(edge => !edge.a.includes(6) && !edge.b.includes(6));
   assert.match(inspectLayout(data).errors.at(-1),/изолированные/);
   data.edges.push({...data.edges[0],a:data.edges[0].b,b:data.edges[0].a});
   assert.match(inspectLayout(data).errors[0],/повторяющаяся/);
@@ -45,8 +45,8 @@ test('the shipyard exports laser, missile and EMP parameters with the correct ki
   assert.ok(!validWeapon({...weaponDefault('emp'),emp_recovery_suppression:1.5}));
 });
 
-test('the shipyard exports railgun, flak and impulse profiles and sets a laser tick rate',()=>{
-  for (const type of ['rail','flak','push']) assert.ok(validWeapon(weaponDefault(type)));
+test('the shipyard exports railguns and sets a laser tick rate',()=>{
+  assert.ok(validWeapon(weaponDefault('rail')));
   assert.ok(!Object.hasOwn(weaponDefault('laser'),'laser_range'));
   assert.equal(weaponDefault('laser').laser_ticks_per_second,12);
   const legacy={...weaponDefault('laser'),laser_range:460,laser_speed:2800};
@@ -55,6 +55,5 @@ test('the shipyard exports railgun, flak and impulse profiles and sets a laser t
   assert.deepEqual(upgradeWeapon(legacy),weaponDefault('laser'));
   assert.ok(!validWeapon({...weaponDefault('laser'),laser_ticks_per_second:16}));
   assert.ok(!validWeapon({...weaponDefault('rail'),rail_penetration:1.5}));
-  assert.ok(!validWeapon({...weaponDefault('flak'),flak_angle:200}));
-  assert.ok(!validWeapon({...weaponDefault('push'),push_impulse:-1}));
+  for (const removed of ['flak','push']) assert.ok(!validWeapon({...weaponDefault(),projectile:removed}));
 });

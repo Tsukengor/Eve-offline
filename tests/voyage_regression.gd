@@ -228,7 +228,7 @@ func _test_ship_physics() -> void:
 	var station := Physics.Body.new()
 	station.model = _voyage.station_body.model
 	station.fixed = true
-	ship.position = Vector2(-130, 24)
+	ship.position = Vector2(-197, 29)
 	ship.velocity = Vector2(120, 0)
 	var hit := Physics.contact(ship, station)
 	_check(hit != null, "A hull corner overlaps the station")
@@ -359,13 +359,13 @@ func _test_unbounded_flight_and_weapon() -> void:
 
 	_key(KEY_TAB)
 	_key(KEY_4)
-	_click(_run.deck._cell_center(Vector2i(4, 10)), MOUSE_BUTTON_RIGHT)
+	_click(_run.deck._cell_center(_voyage.deck.weapons_tile + Vector2i(1, 1)), MOUSE_BUTTON_RIGHT)
 	_key(KEY_TAB)
 	_tick(200)
 	_check(_voyage.projectiles.is_empty() and not _voyage.fire(),
 		"Expired projectiles are removed and the empty station blocks firing")
 	_key(KEY_TAB)
-	_click(_run.deck._cell_center(_voyage.deck.WEAPONS), MOUSE_BUTTON_RIGHT)
+	_click(_run.deck._cell_center(_voyage.deck.weapons_tile), MOUSE_BUTTON_RIGHT)
 	_key(KEY_TAB)
 	_tick(45)
 	_brake()
@@ -381,9 +381,9 @@ func _prepare_ship() -> void:
 	_key(KEY_TAB)
 	_key(KEY_SPACE)
 	_key(KEY_2)
-	_click(_run.deck._cell_center(_voyage.deck.ENGINE), MOUSE_BUTTON_RIGHT)
+	_click(_run.deck._cell_center(_voyage.deck.engine_tile), MOUSE_BUTTON_RIGHT)
 	_key(KEY_3)
-	_click(_run.deck._cell_center(_voyage.deck.AIRLOCK), MOUSE_BUTTON_RIGHT)
+	_click(_run.deck._cell_center(_voyage.deck.airlock_tile), MOUSE_BUTTON_RIGHT)
 	var before := _voyage.deck.crew[1].cell
 	await physics_frame
 	await physics_frame
@@ -395,10 +395,18 @@ func _prepare_ship() -> void:
 
 
 func _approach_station() -> void:
+	# Start the piloting check on a clear final approach. Wreck collisions are tested separately.
+	var bearing := _voyage.station_position().direction_to(_voyage.ship_position)
+	_voyage.ship_position = _voyage.station_position() + bearing * (Voyage.DOCK_RANGE + 105.0)
+	_voyage.heading = (-bearing).angle()
+	_voyage.angular_velocity = 0.0
+	_voyage.velocity = Vector2.ZERO
 	Input.action_press("flight_thrust")
 	for tick in range(420):
 		if _voyage.distance_to_station() < Voyage.DOCK_RANGE:
 			break
+		if _voyage.velocity.length() > 53.0:
+			Input.action_release("flight_thrust")
 		_tick(1)
 	Input.action_release("flight_thrust")
 	_check(_voyage.distance_to_station() < Voyage.DOCK_RANGE, "The ship reaches the docking zone under thrust")
@@ -407,7 +415,7 @@ func _approach_station() -> void:
 	_brake(5.0)
 	_check(_voyage.velocity.length() <= Voyage.DOCK_SPEED
 		and Voyage.Physics.contact(_voyage.body, _voyage.station_body) == null,
-		"Braking and station contact stop the ship outside the station")
+		"Braking before contact stops the ship inside the docking zone")
 
 
 func _brake(tolerance := 0.001) -> void:

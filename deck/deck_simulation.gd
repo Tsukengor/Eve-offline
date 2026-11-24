@@ -8,7 +8,7 @@ enum Order { IDLE, MOVE, POST, REPAIR, PREPARE, SEAL, REPAIR_ROOM }
 
 const Hull = preload("res://deck/hull.gd")
 const ShipPower = preload("res://deck/ship_power.gd")
-enum WorkPose { NONE, HELM, REPAIR, AIRLOCK, WEAPONS, LIFE_SUPPORT, REACTOR }
+enum WorkPose { NONE, HELM, REPAIR, AIRLOCK, WEAPONS, LIFE_SUPPORT, REACTOR, SHIELD }
 
 const ShipLayout = preload("res://deck/ship_layout.gd")
 const RESCUE_LAYOUT := "res://deck/layouts/rescue.json"
@@ -108,6 +108,7 @@ var airlock_tile := AIRLOCK
 var weapons_tile := WEAPONS
 var life_support_tile := LIFE_SUPPORT
 var reactor_tile := REACTOR
+var shield_tile := INVALID_CELL
 var power := ShipPower.new()
 var simulation_speed := 1.0
 var module_cells: Array = MODULE_CELLS
@@ -163,6 +164,7 @@ func load_layout(path: String, for_flight := true) -> String:
 	weapons_tile = layout.modules.weapons
 	life_support_tile = layout.modules.life_support
 	reactor_tile = layout.modules.reactor
+	shield_tile = layout.modules.get("shield", INVALID_CELL)
 	module_cells = layout.modules.values()
 	_bounds = Rect2i(0, 0, plan[0].length(), plan.size())
 	doors.clear()
@@ -369,7 +371,7 @@ func apply_hit(damage: float, breach_chance: float, crew_damage := 0.0,
 		changed.emit()
 		return tile
 	var room_name: String = {"B": "мостик", "E": "двигатели", "W": "вооружение",
-		"L": "кислородная установка", "S": "шлюз", "C": "коридор", "R": "реактор", "G": "грузовой отсек"}[tile_kind(tile)]
+		"L": "кислородная установка", "S": "шлюз", "C": "коридор", "R": "реактор", "G": "грузовой отсек", "H": "щит"}[tile_kind(tile)]
 	notice = ("%s — %s" % ["Пробоина" if breached else "Повреждение", room_name.capitalize()])
 	_report_damage(tile, breached, notice)
 	changed.emit()
@@ -424,7 +426,7 @@ func assign_order(index: int, target: Vector2i, move_only := false) -> void:
 			member.order = Order.REPAIR if engine_health < 1.0 else Order.MOVE
 		elif target == airlock_tile:
 			member.order = Order.PREPARE if airlock_progress < 1.0 else Order.POST
-		elif target in [bridge_tile, weapons_tile, life_support_tile, reactor_tile]:
+		elif target in [bridge_tile, weapons_tile, life_support_tile, reactor_tile, shield_tile]:
 			member.order = Order.POST
 		else:
 			member.order = Order.MOVE
@@ -443,8 +445,17 @@ func assign_order(index: int, target: Vector2i, move_only := false) -> void:
 
 
 func toggle_door(edge: Vector4i) -> void:
-	if doors.has(edge):
-		_set_manual_door(edge, not doors[edge].wants_open)
+	if not doors.has(edge):
+		return
+	var door := doors[edge]
+	if edge in hatches:
+		_set_manual_door(edge, not door.wants_open)
+	elif door.automatic:
+		_set_manual_door(edge, true)
+	elif door.wants_open:
+		_set_manual_door(edge, false)
+	else:
+		set_automatic(edge)
 
 
 func set_automatic(edge: Vector4i) -> void:
@@ -481,7 +492,7 @@ func _set_manual_door(edge: Vector4i, open: bool) -> void:
 			var start := member.landing if member.landing != INVALID_CELL else member.cell
 			if _crosses_edge(start, member.route, edge):
 				_replan(member)
-		notice = "Дверь закроется после освобождения прохода." if _edge_reserved(edge) else "Дверь закрывается."
+		notice = "Дверь закроется после освобождения прохода." if _edge_reserved(edge) else ("Дверь закрывается." if edge in hatches else "Дверь запирается. ЛКМ возвращает автоматику.")
 	changed.emit()
 
 
@@ -550,8 +561,8 @@ func _replan(member: CrewMember) -> void:
 
 
 func _path_to_order(member: CrewMember, start: Vector2i) -> Array[Vector2i]:
-	if (member.order == Order.POST and member.target in [bridge_tile, weapons_tile, life_support_tile, reactor_tile]) \
-		or (member.order == Order.REPAIR_ROOM and member.target == reactor_tile):
+	if (member.order == Order.POST and member.target in [bridge_tile, weapons_tile, life_support_tile, reactor_tile, shield_tile]) \
+		or (member.order == Order.REPAIR_ROOM and member.target in [reactor_tile, shield_tile]):
 		var seat := member.target + Vector2i.DOWN
 		if not _goal_available(seat, member, true):
 			return []
@@ -633,9 +644,15 @@ func unload_passengers() -> void:
 
 func _advance_passengers(delta: float) -> bool:
 	var updated := false
-	for passenger in passengers:
+	for index in range(passengers.size()):
+		var passenger := passengers[index]
 		if passenger.boarding_delay > 0.0:
 			passenger.boarding_delay = maxf(0.0, passenger.boarding_delay - delta)
+			if passenger.boarding_delay == 0.0:
+				for earlier in range(index):
+					if passengers[earlier].position.distance_squared_to(passenger.position) < 0.35:
+						passenger.boarding_delay = 0.08
+						break
 			updated = true
 			continue
 		if passenger.cell == passenger.seat:
@@ -835,7 +852,7 @@ func _advance_doors(delta: float) -> bool:
 		door.openness = move_toward(door.openness, goal, delta / DOOR_SECONDS)
 		updated = true
 		if door.openness == goal and not door.automatic:
-			notice = "Наружная дверь открыта. Утечка кислорода." if edge in hatches and door.wants_open else ("Дверь открыта." if door.wants_open else "Дверь закрыта.")
+			notice = "Наружная дверь открыта. Утечка кислорода." if edge in hatches and door.wants_open else ("Дверь открыта." if door.wants_open else ("Дверь закрыта." if edge in hatches else "Дверь заперта. ЛКМ возвращает автоматику."))
 			if door.wants_open:
 				opened = true
 	if opened:
@@ -954,7 +971,7 @@ func _service_hull(member: CrewMember, delta: float) -> void:
 		if not hull.repair(member.target, rate * Hull.ROOM_MAX * delta):
 			return
 		notice = "Отсек восстановлен."
-		if member.target == reactor_tile:
+		if member.target in [reactor_tile, shield_tile]:
 			member.order = Order.POST
 			return
 		if member.target == engine_tile and engine_health < 1.0:
@@ -998,6 +1015,8 @@ func workstation_pose(member: CrewMember) -> WorkPose:
 				return WorkPose.LIFE_SUPPORT
 			if member.target == reactor_tile and member.cell == reactor_tile + Vector2i.DOWN:
 				return WorkPose.REACTOR
+			if member.target == shield_tile and member.cell == shield_tile + Vector2i.DOWN:
+				return WorkPose.SHIELD
 	return WorkPose.NONE
 
 
@@ -1009,7 +1028,7 @@ func crew_status(member: CrewMember) -> String:
 	if member.landing != INVALID_CELL:
 		return "В пути"
 	if member.blocked:
-		return "Ожидает пульт" if member.target in [bridge_tile, weapons_tile, life_support_tile, reactor_tile] else "Ждёт прохода"
+		return "Ожидает пульт" if member.target in [bridge_tile, weapons_tile, life_support_tile, reactor_tile, shield_tile] else "Ждёт прохода"
 	if not member.route.is_empty():
 		var next := member.route[0]
 		return "Ждёт прохода" if _reserved(next) or _occupant(next) != null else "Готов идти"
@@ -1033,4 +1052,6 @@ func crew_status(member: CrewMember) -> String:
 				return "У кислородной установки"
 			if member.target == reactor_tile:
 				return "У реактора"
+			if member.target == shield_tile:
+				return "За пультом щита"
 	return "Свободен"

@@ -34,6 +34,7 @@ var weapons_cooldown := 0.0
 var flash_remaining := 0.0
 var hit_remaining := 0.0
 var hit_side := Vector2.UP
+var obstacles: Array[Physics.Body] = []
 
 
 func _ready() -> void:
@@ -103,7 +104,9 @@ func _fly_towards(delta: float, goal_velocity: Vector2, throttle := 1.0, aim: Va
 		body.advance(delta, 0.0, 0.0, 0.0, false)
 		return
 	var goal := goal_velocity * lerpf(0.45, 1.0, drive)
-	var course := goal.angle() if aim == null else float(aim)
+	var safe_goal := _avoid_wrecks(goal)
+	var course := safe_goal.angle() if aim == null or safe_goal != goal else float(aim)
+	goal = safe_goal
 	var forward := Vector2.from_angle(heading)
 	var error := absf(angle_difference(heading, course))
 	var deficit := (goal - velocity).dot(forward)
@@ -112,6 +115,33 @@ func _fly_towards(delta: float, goal_velocity: Vector2, throttle := 1.0, aim: Va
 	var trim := goal if aim != null or error < 0.48 else Vector2.ZERO
 	body.advance(delta, main * throttle, body.turn_toward(course, pilot) * throttle,
 		drive * 0.70 * throttle, false, true, trim)
+
+
+func _avoid_wrecks(goal: Vector2) -> Vector2:
+	var direction := goal.normalized() if goal.length_squared() > 1.0 else velocity.normalized()
+	if direction.is_zero_approx():
+		return goal
+	var chosen: Physics.Body
+	var closest := INF
+	var clearance := 0.0
+	for obstacle in obstacles:
+		var offset := obstacle.position - position
+		var radius := body.shield_radius() + obstacle.shield_radius()
+		var along := offset.dot(direction)
+		if absf(offset.cross(direction)) >= radius or along < -radius * 0.45:
+			continue
+		if along > radius + maxf(velocity.length(), goal.length()) * 1.2 or along >= closest:
+			continue
+		chosen = obstacle
+		closest = along
+		clearance = radius
+	if chosen == null:
+		return goal
+	var offset := chosen.position - position
+	var side := 1.0 if offset.dot(direction.orthogonal()) <= 0.0 else -1.0
+	var around := offset - direction * clearance * 0.25 + direction.orthogonal() * side * clearance * 1.2
+	var speed := clampf(goal.length(), 60.0, 155.0)
+	return (around.normalized() * speed + chosen.velocity * 0.4).limit_length(175.0)
 
 
 func can_ram() -> bool:
@@ -130,7 +160,7 @@ func _assign_crew() -> void:
 		var member := deck.crew[index]
 		if member.health <= 0.0 or member.target == deck.INVALID_CELL or member.blocked:
 			continue
-		if member.order == deck.Order.POST and member.target == deck.reactor_tile and deck.hull.condition(deck.reactor_tile) < 1.0:
+		if member.order == deck.Order.POST and member.target in [deck.reactor_tile, deck.shield_tile] and deck.hull.condition(deck.reactor_tile) < 1.0:
 			deck.assign_order(index, deck.reactor_tile)
 		match member.order:
 			deck.Order.POST:
@@ -144,7 +174,7 @@ func _assign_crew() -> void:
 	for breach in deck.hull.breaches:
 		if not sealing.has(breach):
 			jobs.append(breach)
-	for module: Vector2i in [deck.reactor_tile, deck.engine_tile, deck.bridge_tile, deck.life_support_tile, deck.weapons_tile, deck.airlock_tile]:
+	for module: Vector2i in deck.module_cells:
 		_add_repair_job(module, repairing, jobs)
 	for room in deck.hull.rooms:
 		for tile in room.tiles:
@@ -166,6 +196,11 @@ func _assign_crew() -> void:
 			continue
 		deck.assign_order(index, jobs.pop_front())
 
+	if deck.shield_tile != DeckSimulation.INVALID_CELL and not posted.has(deck.shield_tile) and deck.module_online(deck.shield_tile):
+		for index in range(deck.crew.size()):
+			if deck.crew[index].health > 0.0 and deck.crew[index].order == deck.Order.IDLE:
+				deck.assign_order(index, deck.shield_tile)
+				break
 	if jobs.is_empty() and not posted.has(deck.reactor_tile) and deck.hull.condition(deck.reactor_tile) == 1.0:
 		for index in range(deck.crew.size()):
 			if deck.crew[index].health > 0.0 and deck.crew[index].order == deck.Order.IDLE:

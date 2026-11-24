@@ -2,6 +2,7 @@ extends RefCounted
 
 const Model = preload("res://flight/ship_model.gd")
 const ShipPower = preload("res://deck/ship_power.gd")
+const Shield = preload("res://flight/ship_shield.gd")
 
 
 class Body:
@@ -9,6 +10,7 @@ class Body:
 	const NOZZLE_COST := [9.0, 4.0, 4.0, 10.0]
 
 	var power: ShipPower
+	var shield: Shield
 	var model: Model
 	var position := Vector2.ZERO
 	var velocity := Vector2.ZERO
@@ -101,6 +103,12 @@ class Body:
 
 	func outline() -> PackedVector2Array:
 		return model.outline(position, heading)
+
+	func shield_radius() -> float:
+		var radius := 0.0
+		for point in model.hull:
+			radius = maxf(radius, point.distance_squared_to(model.center_of_mass))
+		return sqrt(radius) + 12.0
 
 
 class Contact:

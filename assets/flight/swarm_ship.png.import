@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://ckbxps1p1qjh5"
-path="res://.godot/imported/flak_burst.png-5c1d27ae31a0dc322d505e7fba63382e.ctex"
+uid="uid://clcllts0m7f8t"
+path="res://.godot/imported/swarm_ship.png-e99dceaeb45721084801c8c8e71fb50f.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://assets/flight/flak_burst.png"
-dest_files=["res://.godot/imported/flak_burst.png-5c1d27ae31a0dc322d505e7fba63382e.ctex"]
+source_file="res://assets/flight/swarm_ship.png"
+dest_files=["res://.godot/imported/swarm_ship.png-e99dceaeb45721084801c8c8e71fb50f.ctex"]
 
 [params]
 

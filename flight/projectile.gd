@@ -21,7 +21,6 @@ var shooter: Physics.Body
 var mount := Vector2.ZERO
 var aim_offset := 0.0
 var target_body: Physics.Body
-var target_deck: Deck
 var angle := 0.0
 var reach := 0.0
 var end := Vector2.ZERO
@@ -33,7 +32,7 @@ var beam_tick_elapsed := 0.0
 var beam_blocked := false
 var penetrated: Dictionary[Physics.Body, Dictionary] = {}
 var penetration_left := 0
-var intercepted := false
+var contact_field := false
 
 
 func launch(origin: Vector2, direction: Vector2) -> void:

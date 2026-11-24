@@ -1,0 +1,16 @@
+[gd_scene load_steps=6 format=3]
+
+[ext_resource type="Script" path="res://flight/swarm_enemy.gd" id="1"]
+[ext_resource type="Texture2D" path="res://assets/flight/swarm_ship.png" id="2"]
+[ext_resource type="Resource" path="res://flight/models/swarm.tres" id="3"]
+[ext_resource type="Texture2D" path="res://assets/flight/swarm_wreck.png" id="4"]
+[ext_resource type="Texture2D" path="res://assets/flight/swarm_derelict.png" id="5"]
+
+[node name="SwarmEnemy" type="Node"]
+script = ExtResource("1")
+sprite = ExtResource("2")
+model = ExtResource("3")
+hull_wreck = ExtResource("4")
+crew_derelict = ExtResource("5")
+call_sign = "Роевик"
+sprite_size = 86.0

@@ -44,9 +44,11 @@ const FLOOR_SPRITES := {
 	"W": preload("res://assets/deck/weapons_floor.png"),
 	"L": preload("res://assets/deck/rescue_floor_v2.png"),
 	"G": preload("res://assets/deck/cargo_floor.png"),
+	"H": preload("res://assets/deck/shield_floor.png"),
 }
 const BRIDGE_SPRITE := preload("res://assets/deck/bridge_console_v2.png")
 const ENGINE_SPRITE := preload("res://assets/deck/engine.png")
+const SHIELD_CONSOLE := preload("res://assets/deck/shield_console.png")
 const AIRLOCK_SPRITE := preload("res://assets/deck/airlock.png")
 const REACTOR_SPRITE := preload("res://assets/deck/reactor.png")
 const WEAPONS_SPRITE := preload("res://assets/deck/weapons_console.png")
@@ -196,7 +198,8 @@ func _reset() -> void:
 func _refresh() -> void:
 	if not simulation.plan.is_empty():
 		var size := Vector2(simulation.plan[0].length(), simulation.plan.size())
-		_deck_cell = minf(CELL, minf(636.0 / size.x, 454.0 / size.y))
+		var preferred_cell := 42.0 if simulation.layout_path == DeckSimulation.RESCUE_LAYOUT else CELL
+		_deck_cell = minf(preferred_cell, minf(636.0 / size.x, 454.0 / size.y))
 		_deck_origin = Vector2(389, 381) - size * _deck_cell * 0.5
 	if simulation.tile_kind(_hovered_cell) == ".":
 		_hovered_cell = DeckSimulation.INVALID_CELL
@@ -370,14 +373,19 @@ func _draw_deck() -> void:
 	_draw_module(simulation.weapons_tile, WEAPONS_SPRITE, WEAPONS_COLOR if simulation.weapons_are_manned() else MUTED)
 	if simulation.layout_path == DeckSimulation.RESCUE_LAYOUT:
 		_room_label("МОСТИК", Vector2i(1, 1))
-		_room_label("РЕАКТОР", Vector2i(7, 1))
-		_room_label("МАШИННОЕ ОТДЕЛЕНИЕ", Vector2i(11, 1))
-		_room_label("ВООРУЖЕНИЕ", Vector2i(1, 9))
-		_room_label("КИСЛОРОД", Vector2i(6, 9))
-		_room_label("ШЛЮЗ", Vector2i(11, 9))
-		_text("ГРУЗОВОЙ ОТСЕК", _cell_center(Vector2i(10, 14)) + Vector2(-14, 29), 12, MUTED)
+		_room_label("РЕАКТОР", Vector2i(4, 1))
+		_room_label("ДВИГАТЕЛИ", Vector2i(7, 1))
+		_room_label("ВООРУЖЕНИЕ", Vector2i(1, 4))
+		_room_label("КИСЛОРОД", Vector2i(4, 4))
+		_room_label("ШЛЮЗ", Vector2i(7, 4))
+		_text("ГРУЗОВОЙ ОТСЕК", _cell_center(Vector2i(6, 8)) + Vector2(-14, 29), 12, MUTED)
 	_draw_module(simulation.life_support_tile, LIFE_SUPPORT_SPRITE, ACCENT)
 	_draw_module(simulation.reactor_tile, REACTOR_SPRITE, AMBER if simulation.operator_at(DeckSimulation.WorkPose.REACTOR) == null else ACCENT)
+	if simulation.shield_tile != simulation.INVALID_CELL:
+		var manned := simulation.operator_at(DeckSimulation.WorkPose.SHIELD) != null
+		_draw_module(simulation.shield_tile, SHIELD_CONSOLE, ACCENT if manned else MUTED)
+		if simulation.layout_path == DeckSimulation.RESCUE_LAYOUT:
+			_room_label("ЩИТ", Vector2i(1, 6))
 	for tile in simulation.hull.breaches:
 		_draw_sprite(BREACH_SPRITE, _cell_center(tile), 27.0)
 		_draw_sprite(AIR_LEAK, _cell_center(tile) + Vector2(3, -9) * _deck_cell / CELL, 21.0, Color(1, 1, 1, 0.65))

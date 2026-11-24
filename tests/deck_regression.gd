@@ -3,6 +3,7 @@ extends SceneTree
 
 const DeckSimulation = preload("res://deck/deck_simulation.gd")
 const DECK := preload("res://deck/deck.tscn")
+const CORRIDOR_LAYOUT := "res://tests/rescue_corridor_fixture.json"
 const BRIDGE_DOOR := Vector4i(3, 3, 3, 4)
 const WEAPON_DOOR := Vector4i(2, 8, 2, 9)
 const TICK := 1.0 / 60.0
@@ -20,12 +21,13 @@ func _run() -> void:
 	root.add_child(deck)
 	_sim = deck.get_node("Simulation")
 	_check(paused, "The deck starts in tactical pause")
+	_test_layout_connectivity()
+	_check(_sim.load_layout(CORRIDOR_LAYOUT, false).is_empty(), "Load the corridor traffic fixture")
 	await _test_pause()
 	_test_unrelated_door()
 	_test_closing_before_entry()
 	_test_door_safety()
 	_test_automatic_door()
-	_test_layout_connectivity()
 	_test_imported_layout()
 	_test_wait_for_empty_destination()
 	_test_swap()
@@ -151,7 +153,8 @@ func _test_automatic_door() -> void:
 	_sim.assign_order(1, Vector2i(3, 5))
 	_tick(45)
 	_check(_sim.crew[1].blocked and door.openness == 0.0, "Manual closure overrides automatic access")
-	_sim.set_automatic(BRIDGE_DOOR)
+	_sim.toggle_door(BRIDGE_DOOR)
+	_check(door.automatic, "Third click returns the locked door to automatic mode")
 	_tick(90)
 	_check(_sim.crew[1].cell == Vector2i(3, 5), "Restoring automatic access resumes the waiting order")
 
@@ -170,7 +173,7 @@ func _test_layout_connectivity() -> void:
 
 
 func _test_imported_layout() -> void:
-	var data: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(_sim.RESCUE_LAYOUT))
+	var data: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(CORRIDOR_LAYOUT))
 	data.name = "Испытательная палуба"
 	data.edges.append({"kind": "hatch", "a": [1, 1], "b": [0, 1]})
 	data.edges.append({"kind": "wall", "a": [1, 1], "b": [2, 1]})
@@ -202,7 +205,7 @@ func _test_imported_layout() -> void:
 	file.close()
 	_check(not _sim.load_layout(path).is_empty() and _sim.layout_name == "Испытательная палуба",
 		"Rejecting an isolated compartment preserves the active deck")
-	_check(_sim.load_layout(_sim.RESCUE_LAYOUT, false).is_empty(), "Restore the default deck after importing")
+	_check(_sim.load_layout(CORRIDOR_LAYOUT, false).is_empty(), "Restore the default deck after importing")
 
 
 func _test_wait_for_empty_destination() -> void:

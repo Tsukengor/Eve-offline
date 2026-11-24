@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://cn2wo85vskur0"
-path="res://.godot/imported/impulse_wave.png-9b595f5c2fc2680a29bd44e54343da64.ctex"
+uid="uid://sh1onahmmpi5"
+path="res://.godot/imported/shield_hit.png-1d314259721bb25f70e1e93c10c0257f.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://assets/flight/impulse_wave.png"
-dest_files=["res://.godot/imported/impulse_wave.png-9b595f5c2fc2680a29bd44e54343da64.ctex"]
+source_file="res://assets/flight/shield_hit.png"
+dest_files=["res://.godot/imported/shield_hit.png-1d314259721bb25f70e1e93c10c0257f.ctex"]
 
 [params]
 

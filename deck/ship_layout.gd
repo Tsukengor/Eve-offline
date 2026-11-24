@@ -29,7 +29,7 @@ static func decode(data: Variant) -> Dictionary:
 			return {"error": "Строки палубы должны быть одной длины."}
 		for x in range(width):
 			var kind: String = rows[y][x]
-			if not ".CBESWLRG".contains(kind):
+			if not ".CBESWLRGH".contains(kind):
 				return {"error": "Неизвестный тип клетки."}
 			if kind != ".":
 				floors[Vector2i(x, y)] = kind
@@ -42,6 +42,12 @@ static func decode(data: Variant) -> Dictionary:
 		if floors.get(tile) != MODULES[key]:
 			return {"error": "Установите модуль в подходящий отсек: " + key}
 		equipment[key] = tile
+
+	if modules.has("shield"):
+		var tile := _point(modules.shield)
+		if floors.get(tile) != "H":
+			return {"error": "Установите пост щита в отсек щита."}
+		equipment["shield"] = tile
 
 	var edges: Variant = data.get("edges")
 	if not edges is Array or edges.size() > 4 * floors.size():
@@ -91,6 +97,12 @@ static func decode(data: Variant) -> Dictionary:
 				break
 		if not found:
 			return {"error": "Оставьте свободное рабочее место у модуля: " + key}
+
+	if equipment.has("shield"):
+		var tile: Vector2i = equipment.shield
+		var seat := tile + Vector2i.DOWN
+		if walkable.get(seat) != "H" or Hull.edge_between(tile, seat) in walls:
+			return {"error": "Оставьте рабочее место у поста щита."}
 
 	var pending: Array[Vector2i] = [spawns[0]]
 	var reached := {spawns[0]: true}

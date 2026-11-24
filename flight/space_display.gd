@@ -80,8 +80,9 @@ func _draw_grid() -> void:
 func _draw_flight_sidebar() -> void:
 	var system: Dictionary = Voyage.SYSTEMS[voyage.current_system]
 	if voyage.in_arena:
-		_section("ПРОТИВНИКИ   %d / %d" % [voyage.enemies.size(), Voyage.MAX_TEST_ENEMIES], 155)
+		_section("ПРОТИВНИКИ  %d/%d   ДРОНЫ  %d" % [voyage.enemies.size(), Voyage.MAX_TEST_ENEMIES, voyage.drones.size()], 155)
 		var durability := floori(voyage.deck.hull.integrity / Voyage.DeckSimulation.Hull.HULL_MAX * 100.0)
+		_draw_shield(478)
 		_metric("Скорость", "%d ед/с" % ceili(voyage.velocity.length()), 499, ACCENT)
 		_metric("Корпус", "%d%%" % durability, 528, DANGER if durability < 40 else TEXT)
 		_metric("Орудие", voyage.weapon_status(), 557, MUTED)
@@ -101,8 +102,9 @@ func _draw_flight_sidebar() -> void:
 	_metric("Орудие", voyage.weapon_status(), 367, MUTED)
 	var hull := voyage.deck.hull.integrity / Voyage.DeckSimulation.Hull.HULL_MAX
 	_metric("Корпус", "%d%%" % floori(hull * 100.0), 395, TEXT if hull > 0.4 else DANGER)
-	_draw_energy(421)
-	_draw_objective(452)
+	_draw_energy(417)
+	_draw_shield(436)
+	_draw_objective(466)
 	if voyage.docking_time <= 0.0 and voyage.battle_result.is_empty() and not voyage.dock_blocker().is_empty() and voyage.stage != Voyage.Stage.COMPLETE:
 		_text(voyage.dock_blocker(), Vector2(816, 527), 15, AMBER)
 
@@ -155,6 +157,19 @@ func _draw_ship_metrics(baseline: float) -> void:
 		ACCENT if engine >= 1.0 else DANGER)
 	_metric("Шлюз", "Готов" if airlock >= 1.0 else "%d%%" % floori(airlock * 100),
 		baseline + 62, ACCENT if airlock >= 1.0 else MUTED)
+
+
+func _draw_shield(y: float) -> void:
+	var field := voyage.body.shield
+	var charge := "%d / %d" % [roundi(field.charge), Voyage.Physics.Shield.CAPACITY]
+	var title := "Щит"
+	if field.emp_time > 0.0:
+		title = "Щит · ЭМИ"
+	elif not field.online:
+		title = "Щит · пост свободен" if voyage.deck.emp_time(voyage.deck.shield_tile) == 0.0 else "Щит · пост отключён"
+	elif field.collapsed:
+		title = "Щит · зарядка"
+	_metric(title, charge, y, ACCENT if field.active() else MUTED)
 
 
 func _draw_energy(y: float) -> void:
