@@ -42,6 +42,9 @@ const DOOR_FORCE_SECONDS := 5.0
 const HACK_RANGE := 575.0
 const RESCUER := 2
 const FIGHTER := 4
+const STANDARD_HEALTH := 100.0
+const FIGHTER_HEALTH := 150.0
+const FIGHTER_DAMAGE_SCALE := 0.75
 const HACKER := 5
 const MEDIC := 6
 const SHIELD_TECH := 7
@@ -114,7 +117,10 @@ class CrewMember:
 	var facing := Vector2i.DOWN
 	var order := Order.IDLE
 	var blocked := false
-	var health := 100.0
+	var health := STANDARD_HEALTH
+	var max_health: float:
+		get: return FIGHTER_HEALTH if specialty == FIGHTER else STANDARD_HEALTH
+
 	var gait := 0.0
 	var repair_phase := 0.0
 	var resume_post := INVALID_CELL
@@ -142,6 +148,9 @@ class CrewMember:
 		color = tint
 		cell = start
 		position = Vector2(start)
+
+	func health_ratio() -> float:
+		return health / max_health
 
 
 class Transit:
@@ -356,9 +365,7 @@ func hire_member(title: String, specialty: int) -> bool:
 	var spawn := _free_berth()
 	if spawn == INVALID_CELL:
 		return false
-	var profile: Dictionary = SPECIALTIES[specialty]
-	var recruit := CrewMember.new(title, profile.role, profile.color, spawn)
-	recruit.specialty = specialty
+	var recruit := make_member(title, specialty, spawn)
 	for index in crew.size():
 		if crew[index].health <= 0.0:
 			crew[index] = recruit
@@ -386,7 +393,7 @@ func crew_checkpoint() -> Array:
 	var roster: Array = []
 	for member in crew:
 		roster.append({"title": member.title, "specialty": member.specialty, "cell": member.cell, "position": member.position,
-			"health": member.health, "target": member.target, "order": member.order})
+			"health": member.health, "max_health": member.max_health, "target": member.target, "order": member.order})
 	return roster
 
 
@@ -405,13 +412,12 @@ func restore_roster(roster: Array) -> void:
 			specialty = RESCUER
 		if not specialty is int or specialty < 0 or specialty >= SPECIALTIES.size():
 			return
-		var health := clampf(float(data.get("health", 100.0)), 0.0, 100.0)
 		var tile: Vector2i = data.cell
+		var member := make_member(data.title.substr(0, 22), specialty, tile)
+		var previous_max := clampf(float(data.get("max_health", STANDARD_HEALTH)), 1.0, FIGHTER_HEALTH)
+		var health := clampf(float(data.get("health", previous_max)) / previous_max, 0.0, 1.0) * member.max_health
 		if health > 0.0 and (not hull.room_at.has(tile) or tile in module_cells or occupied.has(tile)):
 			return
-		var profile: Dictionary = SPECIALTIES[specialty]
-		var member := CrewMember.new(data.title.substr(0, 22), profile.role, profile.color, tile)
-		member.specialty = specialty
 		member.health = health
 		if health <= 0.0 and data.get("position") is Vector2 and data.position.is_finite():
 			member.position = data.position
@@ -442,7 +448,7 @@ func service_at_station() -> void:
 	_emp_recovery_loss = 0.0
 	for member in crew:
 		if member.health > 0.0:
-			member.health = 100.0
+			member.health = member.max_health
 		if member.order in [Order.SEAL, Order.REPAIR, Order.REPAIR_ROOM]:
 			member.order = Order.IDLE
 			member.target = INVALID_CELL
@@ -1398,6 +1404,7 @@ func make_member(title: String, specialty: int, tile: Vector2i) -> CrewMember:
 	var profile: Dictionary = SPECIALTIES[specialty]
 	var member := CrewMember.new(title, profile.role, profile.color, tile)
 	member.specialty = specialty
+	member.health = member.max_health
 	return member
 
 
@@ -1500,8 +1507,8 @@ func _advance_combat(delta: float) -> bool:
 			member.combat_target = null
 			if member.specialty == MEDIC and member.order == Order.IDLE:
 				for patient in crew:
-					if patient != member and patient.health > 0.0 and patient.health < 100.0 and hull.room_at[patient.cell] == hull.room_at[member.cell]:
-						patient.health = minf(100.0, patient.health + 5.0 * delta)
+					if patient != member and patient.health > 0.0 and patient.health < patient.max_health and hull.room_at[patient.cell] == hull.room_at[member.cell]:
+						patient.health = minf(patient.max_health, patient.health + 5.0 * delta)
 						updated = true
 			continue
 		var contact := opponent_in_cell(member, member.cell)
@@ -1533,10 +1540,11 @@ func _advance_combat(delta: float) -> bool:
 				member.tactical_clock = 0.35
 				_approach_enemy(member, victim, reach)
 			continue
-		if contact == null or member.order in [Order.IDLE, Order.ATTACK, Order.SABOTAGE]:
+		if member.order in [Order.IDLE, Order.ATTACK, Order.SABOTAGE]:
 			member.route.clear()
-			member.target = INVALID_CELL
 			member.blocked = false
+		if member.order in [Order.IDLE, Order.ATTACK]:
+			member.target = INVALID_CELL
 		if member.attack_cooldown > 0.0:
 			continue
 		var melee := distance <= 1.0
@@ -1545,7 +1553,13 @@ func _advance_combat(delta: float) -> bool:
 		member.attack_frame = 0.28
 		member.attack_cooldown = 0.92 if melee else 1.15
 		if not victim.immune and (victim.faction != 0 or damage_enabled):
-			_hurt_crew(victim, weapon.melee if melee else weapon.shot)
+			var damage: float = weapon.melee if melee else weapon.shot
+			if victim.specialty == FIGHTER:
+				damage *= FIGHTER_DAMAGE_SCALE
+			if _hurt_crew(victim, damage):
+				member.combat_target = null
+				member.tactical_clock = 0.0
+				_replan_waiting_orders()
 		updated = true
 	return updated
 
@@ -1578,6 +1592,14 @@ func _closest_opponent(member: CrewMember, actors: Array[CrewMember], maximum: f
 func _approach_enemy(member: CrewMember, victim: CrewMember, reach: float) -> void:
 	var best: Array[Vector2i] = []
 	var best_cost := INF
+	var blockers: Array[int] = []
+	for other in occupants():
+		if other.health <= 0.0 or other.faction == member.faction or other.cell == member.cell:
+			continue
+		var point := _id(other.cell)
+		if _grid.has_point(point) and not _grid.is_point_disabled(point):
+			_grid.set_point_disabled(point, true)
+			blockers.append(point)
 	_prepare_navigation(member)
 	for tile: Vector2i in hull.room_at:
 		if not _grid.has_point(_id(tile)) or tile == victim.cell or tile.distance_squared_to(victim.cell) > reach * reach:
@@ -1590,6 +1612,8 @@ func _approach_enemy(member: CrewMember, victim: CrewMember, reach: float) -> vo
 			if cost < best_cost:
 				best = path
 				best_cost = cost
+	for point in blockers:
+		_grid.set_point_disabled(point, false)
 	_grid.locked.clear()
 	if not best.is_empty():
 		member.route.assign(best.slice(1))
@@ -1619,8 +1643,14 @@ func _clear_shot_edge(a: Vector2i, b: Vector2i) -> bool:
 
 
 func _sabotage(member: CrewMember, delta: float) -> bool:
-	if member.blocked or not member.route.is_empty() or member.target == INVALID_CELL:
+	if not member.route.is_empty() or member.target == INVALID_CELL:
 		return false
+	if not joined(member.cell, member.target) or tile_kind(member.cell) != tile_kind(member.target):
+		if member.tactical_clock > 0.0:
+			return false
+		member.tactical_clock = 0.35
+		_replan(member)
+		return not member.route.is_empty()
 	member.sabotage_delay -= delta
 	member.attack_direction = Vector2(member.target - member.cell).normalized()
 	member.attack_frame = 0.16
@@ -1826,6 +1856,6 @@ func computer_interrupted() -> bool:
 
 func clear_boarders() -> void:
 	for member in boarders:
-		_hurt_crew(member, 100.0)
+		_hurt_crew(member, member.health)
 	boarders.clear()
 	_replan_waiting_orders()

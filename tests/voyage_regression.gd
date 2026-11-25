@@ -332,7 +332,7 @@ func _check_station_and_computer(voyage: Voyage) -> void:
 		var lost := voyage.deck.crew[5]
 		lost.position += Vector2(0.3, 0.0)
 		var last_position := lost.position
-		voyage.deck._hurt_crew(lost, 100.0)
+		voyage.deck._hurt_crew(lost, lost.health)
 		voyage._save_adventure()
 		_run._reset()
 		_check(voyage.deck.crew.size() == 6 and voyage.deck.crew[5].health == 0.0

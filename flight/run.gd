@@ -713,9 +713,9 @@ func _remove_alert(index: int) -> void:
 
 func _check_low_health() -> void:
 	for member in voyage.deck.crew:
-		if member.health > 0.0 and member.health <= 30.0:
+		if member.health > 0.0 and member.health_ratio() <= 0.30:
 			_notify("%s · мало здоровья (%d HP)" % [member.title, ceili(member.health)], "crew:%d" % member.get_instance_id(),
-				func() -> bool: return member in voyage.deck.crew and member.health > 0.0 and member.health <= 30.0)
+				func() -> bool: return member in voyage.deck.crew and member.health > 0.0 and member.health_ratio() <= 0.30)
 
 
 func _check_threats() -> void:

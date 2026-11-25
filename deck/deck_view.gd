@@ -7,7 +7,7 @@ signal reset_requested
 const DeckSimulation = preload("res://deck/deck_simulation.gd")
 enum CrewFrame { IDLE, WALK, SQUEEZE, REPAIR, CONSOLE, SEAT, MELEE, RANGED, HACK, DOWN }
 
-const FRAME_SIZE := 32.0
+const FRAME_SIZE := 64.0
 const FRAMES_PER_ACTION := 6
 const DIRECTION_COUNT := 4
 const TELEPORT_FLASH := preload("res://assets/deck/teleport_flash.png")
@@ -242,9 +242,9 @@ func _refresh() -> void:
 		var shortcut: String = _settings.key_label("crew_%d" % (index + 1))
 		button.tooltip_text = "Выбрать · " + shortcut
 		_crew_selected_styles[index].border_color = member.color
-		var title := "[%s] %s · %s\n%s\n%d / 100 HP" % [shortcut, member.title, member.role, simulation.crew_status(member), ceili(member.health)]
+		var title := "[%s] %s · %s\n%s\n%d / %d HP" % [shortcut, member.title, member.role, simulation.crew_status(member), ceili(member.health), int(member.max_health)]
 		if _crew_buttons.size() > 4:
-			title = "[%s] %s · %s\n%d HP · %s" % [shortcut, member.title, member.role, ceili(member.health), simulation.crew_status(member)]
+			title = "[%s] %s · %s\n%d/%d HP · %s" % [shortcut, member.title, member.role, ceili(member.health), int(member.max_health), simulation.crew_status(member)]
 		if button.text != title:
 			button.text = title
 		var selected := index == _selected
@@ -490,7 +490,7 @@ func _draw_deck() -> void:
 		if member.faction != 0 and member.health > 0.0:
 			draw_arc(_crew_point(member), _deck_cell * 0.31, 0.0, TAU, 20, DANGER, 1.5, true)
 			var bar := _crew_point(member) + Vector2(-11.0, -14.0) * _deck_cell / CELL
-			draw_line(bar, bar + Vector2(22.0 * member.health / 100.0, 0) * _deck_cell / CELL, DANGER, 2.0)
+			draw_line(bar, bar + Vector2(22.0 * member.health_ratio(), 0) * _deck_cell / CELL, DANGER, 2.0)
 
 
 func _draw_crew_member(member: DeckSimulation.CrewMember) -> void:

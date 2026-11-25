@@ -118,14 +118,15 @@ func _check_boarding_and_hacking() -> void:
 	deck.teleport_in(target, target.cell, true)
 	deck.attack_order(3, target)
 	deck._advance_combat(TICK)
-	_check(target.health == 88.0 and gunner.attack_sprite == 6, "The gunner fires a pistol from several cells away")
+	_check(is_equal_approx(target.health, 141.0) and gunner.attack_sprite == 6, "The gunner fires a pistol from several cells away")
 	target.cell = Vector2i(7, 7)
 	target.position = Vector2(target.cell)
 	gunner.attack_cooldown = 0.0
 	deck._advance_combat(TICK)
-	_check(target.health == 83.0 and gunner.attack_sprite == 3, "The pistol is much weaker at arm's length")
+	_check(is_equal_approx(target.health, 137.25) and gunner.attack_sprite == 3, "The pistol is much weaker at arm's length")
 	_game._reset()
 	_check_occupied_airlock(voyage)
+	_check_boarders_continue_after_kill(voyage)
 
 
 func _check_occupied_airlock(voyage: Voyage) -> void:
@@ -148,10 +149,48 @@ func _check_occupied_airlock(voyage: Voyage) -> void:
 	var attacker: Deck.CrewMember = shared.front()
 	var defender := deck.opponent_in_cell(attacker, attacker.cell)
 	deck._advance_combat(TICK)
-	_check(defender.health < 100.0 and attacker.health < 100.0 and attacker.attack_sprite == 4,
+	_check(defender.health < defender.max_health and attacker.health < attacker.max_health and attacker.attack_sprite == 4,
 		"Both sides fight in a shared tile and the boarder draws their knife")
 	_game._reset()
 
+
+
+func _check_boarders_continue_after_kill(voyage: Voyage) -> void:
+	var deck := voyage.deck
+	deck.auto_crew = false
+	var defender := deck.crew[2]
+	defender.health = 5.0
+	var fighter := deck.make_member("Штурмовой боец", Deck.FIGHTER, defender.cell)
+	_check(fighter.max_health == 150.0 and fighter.health == fighter.max_health
+		and deck.crew[0].max_health == 100.0, "Fighters deploy with half again as much health")
+	deck.teleport_in(fighter, defender.cell, true)
+	deck.boarder_move(fighter, deck.weapons_tile, true)
+	deck._advance_combat(TICK)
+	_check(defender.health == 0.0 and fighter.order == Deck.Order.SABOTAGE and fighter.target == deck.weapons_tile,
+		"Winning a shared-cell fight preserves the squad's sabotage order")
+	var start := fighter.cell
+	for _tick in range(660):
+		deck._physics_process(TICK)
+	_check(fighter.cell != start and (deck.hull.condition(deck.weapons_tile) < 1.0 or deck.crew[3].health < 100.0),
+		"The boarder leaves the casualty behind and keeps attacking the objective or its defenders")
+
+	_game._reset()
+	deck.auto_crew = false
+	_check(deck.hire_member("Защитник", Deck.FIGHTER), "Fighters can join the player's crew")
+	var recruit := deck.crew.back() as Deck.CrewMember
+	recruit.health = 128.0
+	var saved := deck.crew_checkpoint()
+	deck.restore_roster(saved)
+	recruit = deck.crew.back()
+	_check(is_equal_approx(recruit.health, 128.0), "A new checkpoint preserves health above a civilian's capacity")
+	saved.back().erase("max_health")
+	saved.back().health = 80.0
+	deck.restore_roster(saved)
+	recruit = deck.crew.back()
+	_check(is_equal_approx(recruit.health, 120.0), "An old checkpoint keeps the fighter's relative health")
+	deck.service_at_station()
+	_check(recruit.health == 150.0, "Station repairs refill the fighter's entire health bar")
+	_game._reset()
 
 
 func _check_ship_effects() -> void:

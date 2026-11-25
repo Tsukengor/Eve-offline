@@ -472,7 +472,7 @@ func _draw_scan(size: Vector2) -> void:
 	for member in deck.crew:
 		if member.health <= 0.0:
 			continue
-		var color := member.color.lerp(Color("#ff766f"), 1.0 - member.health / 100.0)
+		var color := member.color.lerp(Color("#ff766f"), 1.0 - member.health_ratio())
 		draw_circle(origin + (member.position + Vector2.ONE * 0.45) * cell_size, 2.8, color)
 
 

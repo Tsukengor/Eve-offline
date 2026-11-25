@@ -68,7 +68,7 @@ func advance_boarding(delta: float, target: DeckSimulation, target_position: Vec
 			break
 	var active := team.filter(func(member: DeckSimulation.CrewMember) -> bool: return member.health > 0.0 and member in target.boarders)
 	if _deployed and not _retreating:
-		_retreating = active.any(func(member: DeckSimulation.CrewMember) -> bool: return member.health <= 35.0)
+		_retreating = active.any(func(member: DeckSimulation.CrewMember) -> bool: return member.health_ratio() <= 0.35)
 		_retreating = _retreating or team.any(func(member: DeckSimulation.CrewMember) -> bool: return member.health <= 0.0)
 		_retreating = _retreating or (tactic != Tactic.WEAPONS and objective == target.INVALID_CELL)
 	if distance <= DeckSimulation.HACK_RANGE and not _retreating:
