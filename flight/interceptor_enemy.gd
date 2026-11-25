@@ -81,7 +81,7 @@ func advance_boarding(delta: float, target: DeckSimulation, target_position: Vec
 	if _next_order > 0.0 or active.is_empty():
 		return
 	_next_order = 0.45
-	var extraction := target.free_cells_in_room(target.airlock_tile)
+	var extraction := target.free_cells_in_room(target.airlock_tile, 1)
 	var attack_crew := tactic == Tactic.WEAPONS and objective == target.INVALID_CELL
 	for member: DeckSimulation.CrewMember in active:
 		member.aggressive = attack_crew
@@ -109,7 +109,7 @@ func _objectives(target: DeckSimulation) -> Array[Vector2i]:
 func _transfer(destination: DeckSimulation, source: DeckSimulation, candidates: Array, deploying: bool) -> void:
 	if not deck.power.can_spend(18.0):
 		return
-	var slots := destination.free_cells_in_room(destination.airlock_tile if deploying else destination.teleport_tile)
+	var slots := destination.free_cells_in_room(destination.airlock_tile, 1) if deploying else destination.free_cells_in_room(destination.teleport_tile)
 	var room: int = source.hull.room_at.get(source.teleport_tile if deploying else source.airlock_tile)
 	var moved := 0
 	for member: DeckSimulation.CrewMember in candidates:

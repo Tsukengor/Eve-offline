@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://bw1rfay8jwano"
-path="res://.godot/imported/crew_role_10.png-ea5b359c5da46957a728fbacc6140ac5.ctex"
+uid="uid://bg5yjj6qpxunm"
+path="res://.godot/imported/rescue_crew_loss.png-b804a35ab00e36aae4553404072dba1d.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://assets/deck/crew_role_10.png"
-dest_files=["res://.godot/imported/crew_role_10.png-ea5b359c5da46957a728fbacc6140ac5.ctex"]
+source_file="res://assets/flight/rescue_crew_loss.png"
+dest_files=["res://.godot/imported/rescue_crew_loss.png-b804a35ab00e36aae4553404072dba1d.ctex"]
 
 [params]
 

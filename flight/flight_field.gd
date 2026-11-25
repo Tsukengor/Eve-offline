@@ -5,7 +5,7 @@ const Model = preload("res://flight/ship_model.gd")
 const Physics = preload("res://flight/ship_physics.gd")
 const SHIP := preload("res://assets/flight/rescue_ship.png")
 const PLAYER_WRECK := preload("res://assets/flight/rescue_wreck.png")
-const PLAYER_DERELICT := preload("res://assets/flight/rescue_derelict.png")
+const CREW_LOSS_FRAMES := preload("res://assets/flight/rescue_crew_loss.png")
 const ASTEROIDS := preload("res://assets/flight/asteroid_belt.png")
 const CONTAINER := preload("res://assets/flight/salvage_container.png")
 const ION_CLOUD := preload("res://assets/flight/ion_cloud.png")
@@ -395,10 +395,15 @@ func _draw_player_defeat(body: Physics.Body) -> void:
 	var elapsed := voyage.defeat_elapsed
 	var at := _world_point(body.model.world_point(Vector2.ZERO, body.position, body.heading))
 	var broken := voyage.defeat_hull
-	var ruined := PLAYER_WRECK if broken else PLAYER_DERELICT
 	draw_set_transform(at, body.heading + PI * 0.5)
-	_sprite(ruined, Vector2.ZERO, 60.0)
-	_sprite(SHIP, Vector2.ZERO, 60.0, Color(1.0, 1.0, 1.0, 1.0 - smoothstep(0.0, 0.62, elapsed)))
+	if broken:
+		_sprite(PLAYER_WRECK, Vector2.ZERO, 60.0)
+		_sprite(SHIP, Vector2.ZERO, 60.0, Color(1.0, 1.0, 1.0, 1.0 - smoothstep(0.0, 0.62, elapsed)))
+	else:
+		var frame_size := Vector2(CREW_LOSS_FRAMES.get_width() / 12.0, CREW_LOSS_FRAMES.get_height())
+		var extent := frame_size * 60.0 / frame_size.y
+		var index := mini(11, int(elapsed * 5.9))
+		draw_texture_rect_region(CREW_LOSS_FRAMES, Rect2(-extent * 0.5, extent), Rect2(Vector2(index * frame_size.x, 0), frame_size))
 	draw_set_transform(Vector2.ZERO)
 	if broken:
 		for index in range(3):
@@ -406,8 +411,9 @@ func _draw_player_defeat(body: Physics.Body) -> void:
 			if time >= 0.0 and time < 0.84:
 				var offset := Vector2(-9.0 + index * 8.0, 15.0 - index * 14.0).rotated(body.heading)
 				_effect_frame(WRECK_FRAMES, int(time / 0.84 * 8.0), at + offset, 95.0 + 20.0 * index)
-	elif elapsed < 0.85:
-		_effect_frame(BLACKOUT_FRAMES, int(elapsed / 0.85 * 4.0), at, 83.0)
+	elif elapsed < 1.72:
+		var time := fposmod(elapsed, 0.86)
+		_effect_frame(BLACKOUT_FRAMES, mini(3, int(time / 0.86 * 4.0)), at, 72.0 + elapsed * 18.0)
 
 
 func _draw_thrusters(body: Physics.Body) -> void:

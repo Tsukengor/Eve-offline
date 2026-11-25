@@ -1349,9 +1349,10 @@ func _boarded() -> bool:
 	return deck.boarders.any(func(member: DeckSimulation.CrewMember) -> bool: return member.health > 0.0)
 
 
-func hack_target_available() -> bool:
-	return is_instance_valid(enemy) and not enemy.disabled() and ship_position.distance_to(enemy.position) <= DeckSimulation.HACK_RANGE
+func hack_target_available(hostile: EnemyShip) -> bool:
+	return is_instance_valid(hostile) and hostile in enemies and not hostile.disabled() \
+		and ship_position.distance_to(hostile.position) <= DeckSimulation.HACK_RANGE
 
 
-func hack_enemy(kind: String, subject: Variant = null) -> bool:
-	return hack_target_available() and deck.send_hack(enemy.deck, kind, subject)
+func hack_enemy(hostile: EnemyShip, kind: String, subject: Variant = null) -> bool:
+	return hack_target_available(hostile) and deck.send_hack(hostile.deck, kind, subject)

@@ -65,10 +65,10 @@ var _alerts: Array[Dictionary] = []
 var _dismissed_alerts := {}
 var _recruit_role: OptionButton
 var _hire_test_crew: Button
-var _hack_actions: OptionButton
-var _hack_execute: Button
-var _hack_target: Button
-var _hack_ship := -1
+const HackingPanel = preload("res://ui/hacking_panel.gd")
+var _hack_button: Button
+var _hack_panel: HackingPanel
+var _hack_was_paused := false
 var _slow_motion := false
 var _threat_announced := false
 var _threat_system := -1
@@ -174,6 +174,7 @@ func _close_modes() -> void:
 		_close_pause()
 	_close_journal()
 	_close_computer()
+	_close_hacking()
 
 
 func _return_to_flight() -> void:
@@ -202,6 +203,14 @@ func _apply_mode() -> void:
 
 
 func _refresh() -> void:
+	var crew_loss := not voyage.battle_result.is_empty() and not voyage.defeat_hull
+	deck.crew_loss_progress = voyage.defeat_elapsed if crew_loss else -1.0
+	if crew_loss and mode == Mode.DECK and voyage.defeat_elapsed >= 1.0:
+		mode = Mode.FLIGHT
+		_apply_mode()
+		return
+	if crew_loss and deck.visible:
+		deck.queue_redraw()
 	space.refresh()
 	if voyage.deck != null:
 		_check_low_health()
@@ -277,7 +286,7 @@ func _interact() -> void:
 
 
 func _toggle_pause() -> void:
-	if mode != Mode.MAP and voyage.battle_result.is_empty() and not _adventure_panel.visible and not _computer_panel.visible and not _pause_overlay.visible:
+	if mode != Mode.MAP and voyage.battle_result.is_empty() and not _adventure_panel.visible and not _computer_panel.visible and not _hack_panel.visible and not _pause_overlay.visible:
 		get_tree().paused = not get_tree().paused
 		if get_tree().paused:
 			voyage.stop_laser()
@@ -365,6 +374,8 @@ func _build_pause() -> void:
 
 func _resize_pause() -> void:
 	_pause_overlay.size = get_viewport_rect().size
+	if is_instance_valid(_hack_panel):
+		_hack_panel.size = _pause_overlay.size
 	if is_instance_valid(_settings_overlay):
 		_settings_overlay.size = _pause_overlay.size
 
@@ -429,9 +440,10 @@ func _close_journal() -> void:
 
 
 func _show_defeat() -> void:
-	_close_journal()
+	_close_modes()
 	get_tree().paused = false
-	mode = Mode.FLIGHT
+	if voyage.defeat_hull or mode != Mode.DECK:
+		mode = Mode.FLIGHT
 	_apply_mode()
 
 
@@ -496,9 +508,14 @@ func _build_security_controls() -> void:
 		_recruit_role.add_item(profile.role)
 	_recruit_role.select(Voyage.DeckSimulation.FIGHTER)
 	_hire_test_crew = _button("Нанять", Vector2(242, 683), Vector2(100, 28), _hire_on_range)
-	_hack_actions = _choices(Vector2(540, 683), 344.0)
-	_hack_execute = _button("Применить", Vector2(890, 683), Vector2(104, 28), _execute_hack)
-	_hack_target = _button("Цель", Vector2(1000, 683), Vector2(88, 28), _cycle_scan)
+	_hack_button = _button("Взлом систем", Vector2(888, 678), Vector2(200, 34), _open_hacking)
+	_hack_panel = HackingPanel.new()
+	_hack_panel.z_index = 18
+	add_child(_hack_panel)
+	_hack_panel.size = get_viewport_rect().size
+	_hack_panel.build(_overlay_style())
+	_hack_panel.dismissed.connect(_close_hacking)
+	_hack_panel.hide()
 
 
 func _choices(at: Vector2, width: float) -> OptionButton:
@@ -524,47 +541,23 @@ func _refresh_security_controls() -> void:
 	_recruit_role.visible = on_deck and voyage.in_arena
 	_hire_test_crew.visible = _recruit_role.visible
 	_hire_test_crew.disabled = not voyage.deck.available_berth()
-	_hack_actions.visible = on_deck and voyage.deck.has_hacker()
-	_hack_execute.visible = _hack_actions.visible
-	_hack_target.visible = _hack_actions.visible and voyage.enemies.size() > 1
-	if not _hack_actions.visible:
+	_hack_button.visible = on_deck and voyage.deck.has_hacker()
+
+
+func _open_hacking() -> void:
+	if _hack_panel.visible or not voyage.deck.has_hacker():
 		return
-	var hostile := voyage.enemy
-	var id := hostile.get_instance_id() if is_instance_valid(hostile) else 0
-	if id != _hack_ship:
-		_hack_ship = id
-		_hack_actions.clear()
-		_add_hack_choice("Фаерволл · свой корабль", "firewall")
-		if id != 0:
-			_add_hack_choice("%s · компьютер" % hostile.call_sign, "computer")
-			for room in hostile.deck.hull.rooms:
-				var cell: Vector2i = room.tiles.front()
-				_add_hack_choice("%s · %s" % [hostile.call_sign, hostile.deck.ROOM_NAMES[hostile.deck.tile_kind(cell)]], "room", cell)
-			for edge: Vector4i in hostile.deck.doors:
-				if edge not in hostile.deck.hatches:
-					var a := Vector2i(edge.x, edge.y)
-					var b := Vector2i(edge.z, edge.w)
-					_add_hack_choice("Дверь %s / %s (%d, %d)" % [hostile.deck.ROOM_NAMES[hostile.deck.tile_kind(a)], hostile.deck.ROOM_NAMES[hostile.deck.tile_kind(b)], a.x, a.y], "door", edge)
-		_hack_actions.select(0)
-	var cooldown := voyage.deck.hack_cooldown
-	_hack_actions.tooltip_text = "Фаерволл активен ещё %d с" % ceili(voyage.deck.firewall) if voyage.deck.firewall > 0.0 else "Команды хакера"
-	_hack_execute.disabled = cooldown > 0.0 or not voyage.deck.hacker_available()
-	_hack_execute.text = "%d с" % ceili(cooldown) if cooldown > 0.0 else "Применить"
+	_close_modes()
+	_hack_was_paused = get_tree().paused
+	get_tree().paused = true
+	_hack_panel.open(voyage)
 
 
-func _add_hack_choice(title: String, kind: String, subject: Variant = null) -> void:
-	_hack_actions.add_item(title)
-	_hack_actions.set_item_metadata(_hack_actions.item_count - 1, [kind, subject])
-
-
-func _execute_hack() -> void:
-	var action: Array = _hack_actions.get_item_metadata(_hack_actions.selected)
-	var success := voyage.deck.establish_firewall() if action[0] == "firewall" else voyage.hack_enemy(action[0], action[1])
-	if action[0] == "firewall":
-		voyage.deck.notice = "Фаерволл активен на 20 с." if success else "Хакер недоступен."
-	else:
-		voyage.deck.notice = "Взлом выполнен." if success else "Взлом отклонён. Проверьте дальность, энергию и защиту цели."
-	deck.queue_redraw()
+func _close_hacking() -> void:
+	if _hack_panel == null or not _hack_panel.visible:
+		return
+	_hack_panel.hide()
+	get_tree().paused = _hack_was_paused
 
 
 func _test_button(title: String, at: Vector2, size: Vector2, action: Callable) -> Button:
@@ -803,6 +796,7 @@ func _reset() -> void:
 	_physics_process(0.0)
 	_adventure_panel.hide()
 	_computer_panel.hide()
+	_hack_panel.hide()
 	_pause_overlay.hide()
 	if session == Session.ADVENTURE:
 		voyage.start_adventure(true)
@@ -823,7 +817,7 @@ func _input(event: InputEvent) -> void:
 			_return_to_flight()
 			get_viewport().set_input_as_handled()
 			return
-		if mode != Mode.FLIGHT or _adventure_panel.visible or _computer_panel.visible or _pause_overlay.visible or voyage.scan_enemy:
+		if mode != Mode.FLIGHT or _adventure_panel.visible or _computer_panel.visible or _hack_panel.visible or _pause_overlay.visible or voyage.scan_enemy:
 			_return_to_flight()
 		elif voyage.battle_result.is_empty():
 			_open_pause()
@@ -839,6 +833,8 @@ func _input(event: InputEvent) -> void:
 
 
 func _over_interface() -> bool:
+	if _hack_panel.visible:
+		return true
 	var hovered := get_viewport().gui_get_hovered_control()
 	while is_instance_valid(hovered):
 		if hovered is BaseButton or hovered is Range or hovered is ScrollContainer or hovered is LineEdit or hovered.is_in_group("alert_panels"):

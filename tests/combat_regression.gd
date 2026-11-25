@@ -125,6 +125,33 @@ func _check_boarding_and_hacking() -> void:
 	deck._advance_combat(TICK)
 	_check(target.health == 83.0 and gunner.attack_sprite == 3, "The pistol is much weaker at arm's length")
 	_game._reset()
+	_check_occupied_airlock(voyage)
+
+
+func _check_occupied_airlock(voyage: Voyage) -> void:
+	var deck := voyage.deck
+	var cells := deck.free_cells_in_room(deck.airlock_tile, 1)
+	for index in deck.crew.size():
+		var member := deck.crew[index]
+		member.cell = cells[index]
+		member.position = Vector2(member.cell)
+		member.order = Deck.Order.POST
+		member.target = deck.airlock_tile
+	var interceptor := voyage.add_test_enemy(Voyage.Opponent.INTERCEPTOR) as Voyage.Interceptor
+	interceptor.position = voyage.ship_position + Vector2(180, 0)
+	interceptor.advance_boarding(2.1, deck, voyage.ship_position)
+	_check(deck.boarders.size() == 4, "The complete boarding squad can arrive in an occupied airlock")
+	if deck.boarders.size() != 4:
+		return
+	var shared := deck.boarders.filter(func(member: Deck.CrewMember) -> bool: return deck.opponent_in_cell(member, member.cell) != null)
+	_check(shared.size() >= 3, "Deployment can put opposite factions on the same tile")
+	var attacker: Deck.CrewMember = shared.front()
+	var defender := deck.opponent_in_cell(attacker, attacker.cell)
+	deck._advance_combat(TICK)
+	_check(defender.health < 100.0 and attacker.health < 100.0 and attacker.attack_sprite == 4,
+		"Both sides fight in a shared tile and the boarder draws their knife")
+	_game._reset()
+
 
 
 func _check_ship_effects() -> void:

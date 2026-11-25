@@ -40,13 +40,14 @@ const CREW_LIMIT := 6
 const SECURITY_SECONDS := 20.0
 const DOOR_FORCE_SECONDS := 5.0
 const HACK_RANGE := 575.0
+const RESCUER := 2
 const FIGHTER := 4
 const HACKER := 5
 const MEDIC := 6
 const SHIELD_TECH := 7
 const REACTOR_TECH := 8
-const NAVIGATOR := 9
-const SAPPER := 10
+const LEGACY_NAVIGATOR := 9
+const LEGACY_SAPPER := 10
 const WEAPONS_DATA := [
 	{"melee": 8.0, "sprite": 0},
 	{"melee": 12.0, "sprite": 1},
@@ -57,8 +58,6 @@ const WEAPONS_DATA := [
 	{"melee": 7.0, "sprite": 4},
 	{"melee": 12.0, "sprite": 0},
 	{"melee": 11.0, "sprite": 1},
-	{"melee": 6.0, "sprite": 3, "shot": 9.0, "range": 3},
-	{"melee": 18.0, "sprite": 2},
 ]
 const ROOM_NAMES := {"B": "мостик", "E": "двигатели", "W": "вооружение",
 	"L": "кислородная установка", "S": "шлюз", "C": "коридор", "R": "реактор",
@@ -70,17 +69,15 @@ class Navigation extends AStar2D:
 		return 1.0 + locked.get(edge, 0.0)
 
 const SPECIALTIES := [
-	{"role": "Пилот", "color": Color("#90c8ff"), "skin": 0},
-	{"role": "Инженер", "color": Color("#f7bf79"), "skin": 1},
-	{"role": "Спасатель", "color": Color("#78ead0"), "skin": 2},
-	{"role": "Наводчик", "color": Color("#d6a4fa"), "skin": 3},
-	{"role": "Боец", "color": Color("#ff947d"), "skin": 1},
-	{"role": "Хакер", "color": Color("#aeb1ff"), "skin": 3},
-	{"role": "Медик", "color": Color("#81dfae"), "skin": 2},
-	{"role": "Щитовик", "color": Color("#7ddcfa"), "skin": 0},
-	{"role": "Реакторщик", "color": Color("#f1d083"), "skin": 1},
-	{"role": "Штурман", "color": Color("#96aef0"), "skin": 0},
-	{"role": "Сапёр", "color": Color("#e79386"), "skin": 1},
+	{"role": "Пилот", "color": Color("#90c8ff")},
+	{"role": "Инженер", "color": Color("#f7bf79")},
+	{"role": "Спасатель", "color": Color("#78ead0")},
+	{"role": "Наводчик", "color": Color("#d6a4fa")},
+	{"role": "Боец", "color": Color("#ff947d")},
+	{"role": "Хакер", "color": Color("#aeb1ff")},
+	{"role": "Медик", "color": Color("#81dfae")},
+	{"role": "Эксперт по щитам", "color": Color("#7ddcfa")},
+	{"role": "Энергетик", "color": Color("#f1d083")},
 ]
 
 
@@ -105,7 +102,7 @@ class CrewMember:
 	var title: String
 	var role: String
 	var color: Color
-	var skin := 0
+
 	var specialty := 0
 	var cell: Vector2i
 	var position: Vector2
@@ -114,7 +111,7 @@ class CrewMember:
 	var landing := INVALID_CELL
 	var squeeze := 0.0
 	var squeeze_side := Vector2.ZERO
-	var face_left := false
+	var facing := Vector2i.DOWN
 	var order := Order.IDLE
 	var blocked := false
 	var health := 100.0
@@ -133,6 +130,8 @@ class CrewMember:
 	var attack_frame := 0.0
 	var attack_direction := Vector2.RIGHT
 	var attack_sprite := 0
+	var down_time := 1.0
+	var hack_pose_time := 0.0
 	var force_edge := Vector4i.ZERO
 	var sabotage_delay := 0.0
 	var tactical_clock := 0.0
@@ -312,7 +311,6 @@ func reset(for_flight := false) -> void:
 		CrewMember.new("Ива", "Наводчик", Color("#d6a4fa"), _spawns[3]),
 	])
 	for index in range(crew.size()):
-		crew[index].skin = index
 		crew[index].specialty = index
 		assert(_grid.has_point(_id(crew[index].cell)) and (index == GUNNER_INDEX and weapons_tile == INVALID_CELL or tile_kind(crew[index].cell) == ["B", "E", "S", "W"][index]),
 			"Crew spawn must be on the floor of the assigned compartment")
@@ -360,7 +358,6 @@ func hire_member(title: String, specialty: int) -> bool:
 		return false
 	var profile: Dictionary = SPECIALTIES[specialty]
 	var recruit := CrewMember.new(title, profile.role, profile.color, spawn)
-	recruit.skin = profile.skin
 	recruit.specialty = specialty
 	for index in crew.size():
 		if crew[index].health <= 0.0:
@@ -402,6 +399,10 @@ func restore_roster(roster: Array) -> void:
 		if not data is Dictionary or not data.get("cell") is Vector2i or not data.get("title") is String:
 			return
 		var specialty: Variant = data.get("specialty", 0)
+		if specialty == LEGACY_NAVIGATOR:
+			specialty = 0
+		elif specialty == LEGACY_SAPPER:
+			specialty = RESCUER
 		if not specialty is int or specialty < 0 or specialty >= SPECIALTIES.size():
 			return
 		var health := clampf(float(data.get("health", 100.0)), 0.0, 100.0)
@@ -411,7 +412,6 @@ func restore_roster(roster: Array) -> void:
 		var profile: Dictionary = SPECIALTIES[specialty]
 		var member := CrewMember.new(data.title.substr(0, 22), profile.role, profile.color, tile)
 		member.specialty = specialty
-		member.skin = profile.skin
 		member.health = health
 		if health <= 0.0 and data.get("position") is Vector2 and data.position.is_finite():
 			member.position = data.position
@@ -479,7 +479,7 @@ func pilot_efficiency() -> float:
 	var pilot := operator_at(WorkPose.HELM)
 	if pilot == null:
 		return 0.0
-	var skill := 1.0 if pilot.role == "Пилот" else (0.90 if pilot.specialty == NAVIGATOR else 0.76)
+	var skill := 1.0 if pilot.role == "Пилот" else 0.76
 	return skill * lerpf(0.35, 1.0, hull.condition(bridge_tile)) * (0.32 if hacked(bridge_tile) else 1.0)
 
 
@@ -772,7 +772,7 @@ func _prepare_navigation(member: CrewMember) -> void:
 	_grid.locked.clear()
 	for edge in doors:
 		if doors[edge].lock_time > 0.0 and doors[edge].lock_faction != member.faction:
-			_grid.locked[edge] = WALK_SPEED * (DOOR_FORCE_SECONDS - doors[edge].force_progress) / (1.4 if member.specialty == SAPPER else 1.0)
+			_grid.locked[edge] = WALK_SPEED * (DOOR_FORCE_SECONDS - doors[edge].force_progress) / (1.4 if member.specialty == RESCUER else 1.0)
 
 
 func _route_cost(path: Array[Vector2i]) -> float:
@@ -791,7 +791,7 @@ func _path_to_order(member: CrewMember, start: Vector2i) -> Array[Vector2i]:
 			return []
 		return _path(start, seat)
 	if member.target not in module_cells and member.order not in [Order.SEAL, Order.REPAIR_ROOM, Order.SABOTAGE]:
-		if not _goal_available(member.target, member, true):
+		if not _goal_available(member.target, member, true, member.retreating):
 			return []
 		return _path(start, member.target)
 	var best_path: Array[Vector2i] = []
@@ -900,11 +900,11 @@ func _advance_passengers(delta: float) -> bool:
 	return updated
 
 
-func _goal_available(tile: Vector2i, member: CrewMember, allow_departure: bool) -> bool:
+func _goal_available(tile: Vector2i, member: CrewMember, allow_departure: bool, share_with_opponent := false) -> bool:
 	if tile == member.cell and member.landing == INVALID_CELL:
 		return true
 	for other in occupants():
-		if other == member or other.health <= 0.0:
+		if other == member or other.health <= 0.0 or (share_with_opponent and other.faction != member.faction):
 			continue
 		if not other.route.is_empty() and other.route.back() == tile:
 			return false
@@ -918,11 +918,15 @@ func _goal_available(tile: Vector2i, member: CrewMember, allow_departure: bool) 
 	return true
 
 
-func _occupant(tile: Vector2i) -> CrewMember:
+func _occupant(tile: Vector2i, faction := -1) -> CrewMember:
 	for member in occupants():
-		if member.health > 0.0 and member.cell == tile:
+		if member.health > 0.0 and member.cell == tile and (faction == -1 or member.faction == faction):
 			return member
 	return null
+
+
+func opponent_in_cell(member: CrewMember, tile: Vector2i) -> CrewMember:
+	return _occupant(tile, 1 - member.faction)
 
 
 func _reserved(tile: Vector2i) -> bool:
@@ -943,7 +947,10 @@ func _start_transits() -> bool:
 		if not _waiting_to_walk(member):
 			continue
 		var next := member.route[0]
-		if not _door_allows_step(member.cell, next, member.faction) or _reserved(next) or _occupant(next) != null:
+		if not _door_allows_step(member.cell, next, member.faction) or _reserved(next) or _occupant(next, member.faction) != null:
+			continue
+		var enemy := opponent_in_cell(member, next)
+		if enemy != null and (member.route.size() != 1 or not (enemy == member.combat_target or member.retreating)):
 			continue
 		var transit := Transit.new()
 		_add_path(transit, member, 1)
@@ -975,6 +982,8 @@ func _start_squeeze(member: CrewMember) -> bool:
 		if not _door_allows_step(previous, tile, member.faction) or _reserved(tile):
 			return false
 		var other := _occupant(tile)
+		if opponent_in_cell(member, tile) != null:
+			return false
 		if other == null:
 			if index == 0:
 				return false
@@ -1015,8 +1024,7 @@ func _advance_transits(delta: float) -> bool:
 			var edge := mini(floori(transit.distance), transit.length - 1)
 			var direction := Vector2(path[edge + 1] - path[edge])
 			member.position = Vector2(path[edge]) + direction * (transit.distance - edge)
-			if direction.x != 0.0:
-				member.face_left = direction.x < 0.0
+			member.facing = Vector2i(direction)
 			if transit.squeezed:
 				member.squeeze = sin(PI * transit.distance / transit.length)
 				# Blend the normals at a turn so the sidestep stays continuous.
@@ -1085,7 +1093,13 @@ func _advance_doors(delta: float) -> bool:
 
 func _physics_process(delta: float) -> void:
 	delta *= simulation_speed
-	var updated := not _transits.is_empty() or not alerts.is_empty() or not emp_timers.is_empty() or emp_recovery_time > 0.0
+	var falling := false
+	for member in occupants():
+		member.hack_pose_time = move_toward(member.hack_pose_time, 0.0, delta)
+		if member.health <= 0.0 and member.down_time < 1.0:
+			member.down_time = minf(1.0, member.down_time + delta)
+			falling = true
+	var updated := falling or not _transits.is_empty() or not alerts.is_empty() or not emp_timers.is_empty() or emp_recovery_time > 0.0
 	for room in emp_timers.keys():
 		emp_timers[room] -= delta
 		if emp_timers[room] <= 0.0:
@@ -1192,6 +1206,7 @@ func _hurt_crew(member: CrewMember, damage: float) -> bool:
 	member.health = maxf(0.0, member.health - damage)
 	if member.health > 0.0:
 		return false
+	member.down_time = 0.0
 	member.order = Order.IDLE
 	member.target = INVALID_CELL
 	member.resume_post = INVALID_CELL
@@ -1311,7 +1326,7 @@ func _finish(completed_order: Order, next_order: Order, message: String) -> void
 func workstation_pose(member: CrewMember) -> WorkPose:
 	if member.health <= 0.0 or member.blocked or member.landing != INVALID_CELL or not member.route.is_empty():
 		return WorkPose.NONE
-	if member.cell.distance_squared_to(member.target) != 1:
+	if member.cell.distance_squared_to(member.target) != 1 or (not boarders.is_empty() and opponent_in_cell(member, member.cell) != null):
 		return WorkPose.NONE
 	match member.order:
 		Order.REPAIR, Order.SEAL, Order.REPAIR_ROOM:
@@ -1382,21 +1397,29 @@ func occupants() -> Array[CrewMember]:
 func make_member(title: String, specialty: int, tile: Vector2i) -> CrewMember:
 	var profile: Dictionary = SPECIALTIES[specialty]
 	var member := CrewMember.new(title, profile.role, profile.color, tile)
-	member.skin = profile.skin
 	member.specialty = specialty
 	return member
 
 
-func free_cells_in_room(module: Vector2i) -> Array[Vector2i]:
+func free_cells_in_room(module: Vector2i, arriving_faction := -1) -> Array[Vector2i]:
 	var cells: Array[Vector2i] = []
 	if not hull.room_at.has(module):
 		return cells
+	var occupied: Array[Vector2i] = []
 	for tile in hull.rooms[hull.room_at[module]].tiles:
-		if not _grid.has_point(_id(tile)) or _occupant(tile) != null or _reserved(tile):
+		if not _grid.has_point(_id(tile)) or _occupant(tile, arriving_faction) != null:
 			continue
-		if occupants().any(func(member: CrewMember) -> bool: return member.landing == tile or not member.route.is_empty() and member.route.back() == tile):
+		if arriving_faction < 0 and _reserved(tile):
 			continue
-		cells.append(tile)
+		if occupants().any(func(member: CrewMember) -> bool:
+			var relevant := arriving_faction < 0 or member.faction == arriving_faction
+			return member.health > 0.0 and relevant and (member.landing == tile or not member.route.is_empty() and member.route.back() == tile)):
+			continue
+		if _occupant(tile) != null or _reserved(tile):
+			occupied.append(tile)
+		else:
+			cells.append(tile)
+	cells.append_array(occupied)
 	return cells
 
 
@@ -1481,11 +1504,12 @@ func _advance_combat(delta: float) -> bool:
 						patient.health = minf(100.0, patient.health + 5.0 * delta)
 						updated = true
 			continue
-		if member.retreating:
+		var contact := opponent_in_cell(member, member.cell)
+		if member.retreating and contact == null:
 			continue
-		var victim := member.combat_target
-		if member.order != Order.ATTACK:
-			# Operators hold their post, and people with active movement orders follow them.
+		var victim := contact if contact != null else member.combat_target
+		if member.order != Order.ATTACK and contact == null:
+			# Operators hold their posts until an attacker reaches their tile.
 			if member.order not in [Order.IDLE, Order.SABOTAGE]:
 				continue
 			victim = _closest_opponent(member, actors, 4.5 if member.faction > 0 and not member.aggressive else INF)
@@ -1499,6 +1523,9 @@ func _advance_combat(delta: float) -> bool:
 		if tile_kind(member.cell) == "C" and hacked(member.cell):
 			reach = 1.0
 		var distance := Vector2(member.cell).distance_to(Vector2(victim.cell))
+		if contact == null and reach == 1.0 and member.order != Order.SABOTAGE and member.tactical_clock <= 0.0:
+			if _try_close_combat(member, victim):
+				continue
 		if distance > reach or not _line_of_fire(member.cell, victim.cell):
 			if member.order == Order.SABOTAGE:
 				updated = _sabotage(member, delta) or updated
@@ -1506,13 +1533,14 @@ func _advance_combat(delta: float) -> bool:
 				member.tactical_clock = 0.35
 				_approach_enemy(member, victim, reach)
 			continue
-		member.route.clear()
-		member.target = INVALID_CELL
-		member.blocked = false
+		if contact == null or member.order in [Order.IDLE, Order.ATTACK, Order.SABOTAGE]:
+			member.route.clear()
+			member.target = INVALID_CELL
+			member.blocked = false
 		if member.attack_cooldown > 0.0:
 			continue
 		var melee := distance <= 1.0
-		member.attack_direction = Vector2(victim.cell - member.cell).normalized()
+		member.attack_direction = Vector2.RIGHT * (1.0 if member.faction != 0 else -1.0) if contact != null else Vector2(victim.cell - member.cell).normalized()
 		member.attack_sprite = weapon.sprite if melee else (7 if member.specialty == FIGHTER else 6)
 		member.attack_frame = 0.28
 		member.attack_cooldown = 0.92 if melee else 1.15
@@ -1520,6 +1548,18 @@ func _advance_combat(delta: float) -> bool:
 			_hurt_crew(victim, weapon.melee if melee else weapon.shot)
 		updated = true
 	return updated
+
+
+func _try_close_combat(member: CrewMember, victim: CrewMember) -> bool:
+	if member.cell.distance_squared_to(victim.cell) != 1 or not joined(member.cell, victim.cell):
+		return false
+	if not _goal_available(victim.cell, member, false, true):
+		return false
+	var edge := edge_between(member.cell, victim.cell)
+	if doors.has(edge) and not (doors[edge].automatic or doors[edge].wants_open):
+		return false
+	member.route.assign([victim.cell])
+	return true
 
 
 func _closest_opponent(member: CrewMember, actors: Array[CrewMember], maximum: float) -> CrewMember:
@@ -1619,6 +1659,7 @@ func establish_firewall() -> bool:
 		return false
 	firewall = SECURITY_SECONDS
 	hack_cooldown = 24.0
+	_animate_hacker()
 	changed.emit()
 	return true
 
@@ -1630,8 +1671,16 @@ func send_hack(destination, kind: String, target: Variant = null) -> bool:
 		return false
 	power.spend(12.0)
 	hack_cooldown = 7.0
+	_animate_hacker()
 	changed.emit()
 	return true
+
+
+func _animate_hacker() -> void:
+	for member in crew:
+		if member.health > 0.0 and member.specialty == HACKER:
+			member.hack_pose_time = 1.1
+			return
 
 
 func receive_hack(kind: String, target: Variant) -> bool:
@@ -1746,7 +1795,7 @@ func _advance_security(delta: float) -> bool:
 		if edge == Vector4i.ZERO:
 			continue
 		member.repair_phase += delta
-		force[edge] = maxf(force.get(edge, 0.0), 1.4 if member.specialty == SAPPER else 1.0)
+		force[edge] = maxf(force.get(edge, 0.0), 1.4 if member.specialty == RESCUER else 1.0)
 	for edge in doors:
 		var door := doors[edge]
 		if door.lock_time <= 0.0:

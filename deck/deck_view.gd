@@ -5,48 +5,41 @@ extends Node2D
 signal reset_requested
 
 const DeckSimulation = preload("res://deck/deck_simulation.gd")
-const CREW_SPRITES := [
-	preload("res://assets/deck/pilot.png"),
-	preload("res://assets/deck/engineer.png"),
-	preload("res://assets/deck/rescuer.png"),
-	preload("res://assets/deck/gunner.png"),
-]
-const CREW_WEAPONS := preload("res://assets/deck/crew_weapons.png")
+enum CrewFrame { IDLE, WALK, SQUEEZE, REPAIR, CONSOLE, SEAT, MELEE, RANGED, HACK, DOWN }
+
+const FRAME_SIZE := 32.0
+const FRAMES_PER_ACTION := 6
+const DIRECTION_COUNT := 4
 const TELEPORT_FLASH := preload("res://assets/deck/teleport_flash.png")
 const TELEPORT_CONSOLE := preload("res://assets/deck/teleport_console.png")
-const ROLE_SPRITES := {
-	4: preload("res://assets/deck/crew_role_4.png"),
-	5: preload("res://assets/deck/crew_role_5.png"),
-	6: preload("res://assets/deck/crew_role_6.png"),
-	7: preload("res://assets/deck/crew_role_7.png"),
-	8: preload("res://assets/deck/crew_role_8.png"),
-	9: preload("res://assets/deck/crew_role_9.png"),
-	10: preload("res://assets/deck/crew_role_10.png"),
-}
-const WALK_FRAMES := preload("res://assets/deck/crew_walk.png")
-const REPAIR_FRAMES := preload("res://assets/deck/crew_repair.png")
 const CARGO_SEAT := preload("res://assets/deck/cargo_seat.png")
 const PASSENGER := preload("res://assets/deck/passenger.png")
 const UPGRADE_PLATE := preload("res://assets/deck/upgrade_plate.png")
 const FREIGHT := preload("res://assets/flight/salvage_container.png")
 const REPAIR_SOUND := preload("res://assets/audio/repair_tools.wav")
-const HELM_SPRITES := [
-	preload("res://assets/deck/pilot_helm.png"),
-	preload("res://assets/deck/engineer_helm.png"),
-	preload("res://assets/deck/rescuer_helm.png"),
-	preload("res://assets/deck/gunner_seated.png"),
+const CREW_DIRECTIONS := [Vector2i.UP, Vector2i.DOWN, Vector2i.LEFT, Vector2i.RIGHT]
+const CREW_ATLAS := [
+	preload("res://assets/deck/professions/pilot.png"),
+	preload("res://assets/deck/professions/engineer.png"),
+	preload("res://assets/deck/professions/rescuer.png"),
+	preload("res://assets/deck/professions/gunner.png"),
+	preload("res://assets/deck/professions/fighter.png"),
+	preload("res://assets/deck/professions/hacker.png"),
+	preload("res://assets/deck/professions/medic.png"),
+	preload("res://assets/deck/professions/shield_expert.png"),
+	preload("res://assets/deck/professions/power_specialist.png"),
 ]
-const WORK_FRAME := 128.0
-const GUNNER_WORK := preload("res://assets/deck/work/gunner_work.png")
-const WORK_DIRECTIONS := [Vector2i.UP, Vector2i.DOWN, Vector2i.LEFT, Vector2i.RIGHT]
-const WORK_ATLASES := {
-	DeckSimulation.WorkPose.AIRLOCK: {
-		Vector2i.UP: preload("res://assets/deck/work/airlock_north.png"),
-		Vector2i.DOWN: preload("res://assets/deck/work/airlock_south.png"),
-		Vector2i.LEFT: preload("res://assets/deck/work/airlock_west.png"),
-		Vector2i.RIGHT: preload("res://assets/deck/work/airlock_east.png"),
-	},
-}
+const CREW_PORTRAITS := [
+	preload("res://assets/deck/professions/pilot_portrait.png"),
+	preload("res://assets/deck/professions/engineer_portrait.png"),
+	preload("res://assets/deck/professions/rescuer_portrait.png"),
+	preload("res://assets/deck/professions/gunner_portrait.png"),
+	preload("res://assets/deck/professions/fighter_portrait.png"),
+	preload("res://assets/deck/professions/hacker_portrait.png"),
+	preload("res://assets/deck/professions/medic_portrait.png"),
+	preload("res://assets/deck/professions/shield_expert_portrait.png"),
+	preload("res://assets/deck/professions/power_specialist_portrait.png"),
+]
 const WALL_TRIM := preload("res://assets/deck/floor_wall_trim.png")
 const FLOOR_THRESHOLD := preload("res://assets/deck/floor_threshold.png")
 const FLOOR_SPRITES := {
@@ -92,6 +85,8 @@ const WEAPONS_COLOR := Color("#d6a4fa")
 var _font := ThemeDB.fallback_font
 var _selected := 1
 var _slow_motion := false
+var _animation_clock := 0.0
+var crew_loss_progress := -1.0
 var _hovered_cell := DeckSimulation.INVALID_CELL
 var _deck_origin := ORIGIN
 var _deck_cell := CELL
@@ -135,7 +130,10 @@ func _physics_process(_delta: float) -> void:
 			queue_redraw()
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
+	if is_visible_in_tree() and not get_tree().paused:
+		_animation_clock += delta * simulation.simulation_speed
+		queue_redraw()
 	if DisplayServer.get_name() == "headless":
 		return
 	var repairing := (is_visible_in_tree() and not get_tree().paused
@@ -240,7 +238,7 @@ func _refresh() -> void:
 	for index in range(_crew_buttons.size()):
 		var member := simulation.crew[index]
 		var button := _crew_buttons[index]
-		button.icon = _crew_sprite(member)
+		button.icon = CREW_PORTRAITS[member.specialty]
 		var shortcut: String = _settings.key_label("crew_%d" % (index + 1))
 		button.tooltip_text = "Выбрать · " + shortcut
 		_crew_selected_styles[index].border_color = member.color
@@ -344,6 +342,9 @@ func _draw() -> void:
 		_text(simulation.layout_name, Vector2(54, 190), 15, MUTED)
 	_text("Экипаж", Vector2(792, 164), 21)
 	_draw_deck()
+	if crew_loss_progress >= 0.0:
+		var shade := smoothstep(0.08, 0.95, crew_loss_progress)
+		draw_rect(Rect2(32, 126, 714, 504), Color(0.025, 0.045, 0.075, shade * 0.86))
 
 	_draw_meter("Двигатель · ЭМИ" if simulation.emp_time(simulation.engine_tile) > 0.0 else "Двигатель", minf(simulation.engine_health, simulation.hull.condition(simulation.engine_tile)), 458, AMBER)
 	_draw_meter("Спасательный шлюз", simulation.airlock_progress, 499, ACCENT)
@@ -490,71 +491,57 @@ func _draw_deck() -> void:
 			draw_arc(_crew_point(member), _deck_cell * 0.31, 0.0, TAU, 20, DANGER, 1.5, true)
 			var bar := _crew_point(member) + Vector2(-11.0, -14.0) * _deck_cell / CELL
 			draw_line(bar, bar + Vector2(22.0 * member.health / 100.0, 0) * _deck_cell / CELL, DANGER, 2.0)
-		if member.health > 0.0 and member.attack_frame > 0.0:
-			_draw_weapon(member, member.attack_direction, member.attack_sprite, member.attack_frame / 0.28)
-		var forced := simulation._needs_to_force(member)
-		if forced != Vector4i.ZERO:
-			var center := (Vector2(forced.x, forced.y) + Vector2(forced.z, forced.w)) * 0.5
-			_draw_weapon(member, (center - Vector2(member.cell)).normalized(), 2, fposmod(member.repair_phase, 0.6))
-
-
-func _crew_sprite(member: DeckSimulation.CrewMember) -> Texture2D:
-	return ROLE_SPRITES.get(member.specialty, CREW_SPRITES[member.skin])
-
-
-func _draw_weapon(member: DeckSimulation.CrewMember, direction: Vector2, frame: int, swing: float) -> void:
-	var extent := Vector2.ONE * _deck_cell * 0.64
-	var point := _crew_point(member) + direction * _deck_cell * (0.38 + 0.11 * sin(swing * PI))
-	draw_set_transform(point, direction.angle())
-	draw_texture_rect_region(CREW_WEAPONS, Rect2(-extent * 0.5, extent), Rect2(frame * 24, 0, 24, 24))
-	draw_set_transform(Vector2.ZERO)
 
 
 func _draw_crew_member(member: DeckSimulation.CrewMember) -> void:
-	var skin := member.skin
-	var point := _crew_point(member)
-	if member.health <= 0.0:
-		draw_set_transform(point, PI * 0.5)
-		_draw_sprite(_crew_sprite(member), Vector2.ZERO, 21.5, Color("#627884"))
-		draw_set_transform(Vector2.ZERO)
-		return
+	var direction := member.facing
+	var state := CrewFrame.IDLE
+	var frame := int(_animation_clock * 3.0) % FRAMES_PER_ACTION
 	var pose := simulation.workstation_pose(member)
-	if pose == DeckSimulation.WorkPose.HELM or pose == DeckSimulation.WorkPose.WEAPONS:
-		_draw_sprite(HELM_SPRITES[skin], point, 26.0)
-		return
-	var direction := member.target - member.cell
-	if pose == DeckSimulation.WorkPose.REPAIR:
-		var frame := int(member.repair_phase * 9.0) % 4
-		var row := WORK_DIRECTIONS.find(direction) * 4 + skin
-		_draw_atlas_frame(REPAIR_FRAMES, point, 27.0, Vector2(frame, row))
-		return
-	if pose != DeckSimulation.WorkPose.NONE:
-		var atlas: Texture2D = WORK_ATLASES[DeckSimulation.WorkPose.AIRLOCK][direction]
-		var frame := Vector2(skin, 0)
-		if skin == DeckSimulation.GUNNER_INDEX:
-			atlas = GUNNER_WORK
-			frame = Vector2(WORK_DIRECTIONS.find(direction), 1)
-		_draw_atlas_frame(atlas, point, 27.0, frame)
-		return
-	var squeezing := member.squeeze > 0.12
-	draw_set_transform(point, 0.0, Vector2(-1.0 if member.face_left else 1.0, 1.0))
-	if member.landing != simulation.INVALID_CELL or squeezing:
-		var frame := int(member.gait * 4.0) % 4
-		_draw_atlas_frame(WALK_FRAMES, Vector2.ZERO, lerpf(21.5, 17.0, member.squeeze),
-			Vector2(frame, skin + 4 if squeezing else skin))
-	else:
-		_draw_sprite(_crew_sprite(member), Vector2.ZERO, 21.5)
-	draw_set_transform(Vector2.ZERO)
+	var door := simulation._needs_to_force(member)
+	if member.health <= 0.0:
+		state = CrewFrame.DOWN
+		frame = mini(5, int(maxf(member.down_time, crew_loss_progress) * 8.0))
+	elif member.attack_frame > 0.0:
+		state = CrewFrame.MELEE if member.attack_sprite < 6 else CrewFrame.RANGED
+		direction = _cardinal(member.attack_direction)
+		frame = clampi(int((1.0 - member.attack_frame / 0.28) * FRAMES_PER_ACTION), 0, 5)
+	elif member.hack_pose_time > 0.0:
+		state = CrewFrame.HACK
+		frame = int(_animation_clock * 11.0) % FRAMES_PER_ACTION
+	elif door != Vector4i.ZERO:
+		var center := (Vector2(door.x, door.y) + Vector2(door.z, door.w)) * 0.5
+		state = CrewFrame.MELEE
+		direction = _cardinal(center - Vector2(member.cell))
+		frame = int(member.repair_phase * 9.0) % FRAMES_PER_ACTION
+	elif pose != DeckSimulation.WorkPose.NONE:
+		direction = member.target - member.cell
+		state = CrewFrame.CONSOLE
+		frame = int(_animation_clock * 8.0) % FRAMES_PER_ACTION
+		if pose == DeckSimulation.WorkPose.HELM or pose == DeckSimulation.WorkPose.WEAPONS:
+			state = CrewFrame.SEAT
+		elif pose == DeckSimulation.WorkPose.REPAIR:
+			state = CrewFrame.REPAIR
+			frame = int(member.repair_phase * 11.0) % FRAMES_PER_ACTION
+	elif member.landing != simulation.INVALID_CELL or member.squeeze > 0.12:
+		state = CrewFrame.SQUEEZE if member.squeeze > 0.12 else CrewFrame.WALK
+		frame = int(member.gait * 5.0) % FRAMES_PER_ACTION
+	var row := int(state) * DIRECTION_COUNT + maxi(0, CREW_DIRECTIONS.find(direction))
+	var extent := Vector2.ONE * _deck_cell * 0.92
+	var rect := Rect2(_crew_point(member) - extent * 0.5, extent)
+	var source := Rect2(Vector2(frame, row) * FRAME_SIZE, Vector2.ONE * FRAME_SIZE)
+	var tint := Color("#83929f") if member.health <= 0.0 and frame >= 3 else Color.WHITE
+	draw_texture_rect_region(CREW_ATLAS[member.specialty], rect, source, tint)
+
+
+func _cardinal(direction: Vector2) -> Vector2i:
+	if absf(direction.x) >= absf(direction.y):
+		return Vector2i.LEFT if direction.x < 0.0 else Vector2i.RIGHT
+	return Vector2i.UP if direction.y < 0.0 else Vector2i.DOWN
 
 
 func _room_label(title: String, anchor: Vector2i) -> void:
 	_text(title, _cell_center(anchor) - Vector2(_deck_cell * 0.48, _deck_cell * 0.66), 11, MUTED)
-
-
-func _draw_atlas_frame(atlas: Texture2D, at: Vector2, size: float, frame: Vector2) -> void:
-	var extent := Vector2.ONE * size * _deck_cell / CELL
-	draw_texture_rect_region(atlas, Rect2(at - extent * 0.5, extent),
-		Rect2(frame * WORK_FRAME, Vector2.ONE * WORK_FRAME))
 
 
 func _draw_passenger(passenger: DeckSimulation.Passenger) -> void:
@@ -635,7 +622,9 @@ func _cell_center(tile: Vector2i) -> Vector2:
 
 func _crew_point(member: DeckSimulation.CrewMember) -> Vector2:
 	var point := _deck_origin + (member.position + Vector2(0.5, 0.5)) * _deck_cell
-	if simulation.workstation_pose(member) != DeckSimulation.WorkPose.NONE:
+	if member.health > 0.0 and simulation.opponent_in_cell(member, member.cell) != null:
+		point.x += _deck_cell * (0.20 if member.faction == 0 else -0.20)
+	elif simulation.workstation_pose(member) != DeckSimulation.WorkPose.NONE:
 		point += Vector2(member.target - member.cell) * 5.0 * _deck_cell / CELL
 	return point
 

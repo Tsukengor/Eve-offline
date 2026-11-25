@@ -35,6 +35,8 @@ func _test_voyage() -> void:
 	_test_application_updates()
 	_test_asteroid_belt()
 	_run._reset()
+	_test_hack_map_and_crew_loss()
+	_run._reset()
 	await _test_inertia_and_pause()
 
 	_key(KEY_M)
@@ -553,6 +555,48 @@ func _test_asteroid_belt() -> void:
 	_voyage._advance_asteroids()
 	_check(_voyage.deep_asteroids.size() > 450 and far_rock not in _voyage.deep_asteroids,
 		"The field streams further chunks instead of ending beyond the belt")
+
+
+func _test_hack_map_and_crew_loss() -> void:
+	var deck := _voyage.deck
+	var hunter := _voyage._spawn_enemy(_voyage.ship_position + Vector2(240, 0), Voyage.Opponent.DRILL)
+	var second := _voyage._spawn_enemy(_voyage.ship_position + Vector2(280, 20), Voyage.Opponent.FIGHTER)
+	_voyage.enemies.append_array([hunter, second])
+	_check(deck.hire_member("Хакер", deck.HACKER) and deck.hire_member("Специалист", deck.RESCUER),
+		"The updated roster can hire specialists")
+	var roster := deck.crew_checkpoint()
+	roster[0].specialty = 9
+	roster[5].specialty = 10
+	deck.restore_roster(roster)
+	_check(deck.SPECIALTIES.size() == 9 and deck.crew[0].specialty == 0 and deck.crew[5].specialty == deck.RESCUER,
+		"Removed roles migrate without dropping the roster")
+	_run._navigate(Run.Mode.DECK)
+	_run._open_hacking()
+	var menu := _run._hack_panel
+	_check(menu.visible and menu._ships.item_count == 2, "The hacking window lists the ships in the encounter")
+	menu._select(1)
+	var tile := second.deck.reactor_tile
+	var room := menu._map.pick(menu._map._tile_center(tile))
+	menu._target(room.kind, room.subject)
+	_check(second.deck.hacked(tile) and not hunter.deck.hacked(hunter.deck.reactor_tile),
+		"Clicking a room affects only the selected ship")
+	deck.hack_cooldown = 0.0
+	var edge: Vector4i = second.deck.doors.keys().filter(func(value: Vector4i) -> bool: return value not in second.deck.hatches).front()
+	var door := menu._map.pick(menu._map._edge_center(edge))
+	menu._target(door.kind, door.subject)
+	_check(second.deck.doors[edge].lock_time == 20.0, "The plan prioritizes a door click over the adjoining room")
+	_run._close_hacking()
+
+	for member in deck.crew:
+		deck._hurt_crew(member, 100.0)
+	_voyage._advance_battle(TICK)
+	_check(not _voyage.defeat_hull and _run.mode == Run.Mode.DECK and not _run._defeat_panel.visible,
+		"Crew defeat starts with a blackout on the deck")
+	_voyage._advance_defeat(1.1)
+	_check(_run.mode == Run.Mode.FLIGHT and not _run._defeat_panel.visible, "The sequence cuts to the intact derelict")
+	_voyage._advance_defeat(2.0)
+	_check(_run._defeat_panel.visible and _run._defeat_title.text == "Экипаж погиб",
+		"The dedicated crew defeat screen appears after the sequence")
 
 
 func _test_inertia_and_pause() -> void:
