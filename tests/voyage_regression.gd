@@ -20,6 +20,7 @@ func _test_voyage() -> void:
 	_run = SCENE.instantiate()
 	root.add_child(_run)
 	_voyage = _run.voyage
+	_voyage.deck.auto_crew = false
 	_check(_run.mode == Run.Mode.FLIGHT and _voyage.fuel == 5 and _voyage.deck.engine_health == 1.0,
 		"Main scene starts in a healthy ship in local flight")
 	_test_ship_physics()
@@ -47,7 +48,7 @@ func _test_voyage() -> void:
 	_key(KEY_ENTER)
 	_check(_voyage.fuel == 3 and _voyage.current_system == Voyage.DISTRESS,
 		"An impaired engine blocks a jump without spending fuel")
-	_key(KEY_ESCAPE)
+	_key(KEY_M)
 
 	Input.action_press("flight_fire")
 	_tick(180)
@@ -102,7 +103,7 @@ func _test_voyage() -> void:
 	_key(KEY_ENTER)
 	_check(_voyage.current_system == Voyage.REFUGE and _voyage.jump_blocker(Voyage.DISTRESS).contains("топлива"),
 		"Insufficient fuel blocks a jump")
-	_key(KEY_ESCAPE)
+	_key(KEY_M)
 	_approach_station()
 	_key(KEY_E)
 	_tick(110)
@@ -267,10 +268,77 @@ func _test_adventure() -> void:
 		and voyage.adventure.slots == [0, 2] and voyage.body.shield.capacity == 125.0
 		and voyage.adventure.containers[Voyage.Adventure.SCRAP].size() == 1 and voyage.battle_result.is_empty(),
 		"Recovery restores location, upgrades, contracts, loot and the defeated encounter set")
+	_check_station_and_computer(voyage)
 	DirAccess.remove_absolute(save_path)
 	_run._return_to_menu()
 	await process_frame
 	await process_frame
+
+
+func _check_station_and_computer(voyage: Voyage) -> void:
+	_key(KEY_ESCAPE)
+	_check(_run._pause_overlay.visible and paused, "Escape opens the central pause overlay")
+	_run._open_settings()
+	_check(is_instance_valid(_run._settings_overlay) and paused, "Settings open without leaving or unpausing the run")
+	_key(KEY_ESCAPE)
+	_key(KEY_ESCAPE)
+	_check(not _run._pause_overlay.visible and not paused, "Returning from settings restores the original pause state")
+	_run._open_journal()
+	var panel := _run._adventure_panel
+	_check(0 not in panel._filtered_contracts(), "Completed contracts are hidden by default")
+	panel._show_completed = true
+	_check(0 in panel._filtered_contracts(), "The completed toggle reveals settled contracts")
+	panel._type = 2
+	_check(0 not in panel._filtered_contracts() and 3 in panel._filtered_contracts(), "The battle filter excludes cargo deliveries")
+	_run._close_journal()
+
+	voyage.adventure.credits = 180
+	var candidates: Array[Dictionary] = []
+	var specialties := Voyage.DeckSimulation.SPECIALTIES.size()
+	for attempt in range(100):
+		voyage.adventure.recruit_seed = attempt
+		candidates = voyage.adventure.candidates(voyage.current_system, specialties)
+		if candidates.size() >= 3:
+			break
+	if candidates.size() >= 3:
+		_check(voyage.hire_recruit(candidates[0].id) and voyage.hire_recruit(candidates[1].id)
+			and voyage.deck.crew.size() == 6 and voyage.adventure.credits == 50,
+			"Recruitment fills two new berths and debits the expected credits")
+		_check(not voyage.hire_recruit(candidates[2].id) and voyage.deck.crew.size() == 6,
+			"A full crew cannot hire a seventh member")
+		var lost := voyage.deck.crew[5]
+		lost.position += Vector2(0.3, 0.0)
+		var last_position := lost.position
+		voyage.deck._hurt_crew(lost, 100.0)
+		voyage._save_adventure()
+		_run._reset()
+		_check(voyage.deck.crew.size() == 6 and voyage.deck.crew[5].health == 0.0
+			and voyage.deck.crew[5].position == last_position,
+			"A recruited casualty's identity and exact position survive a station restore")
+	else:
+		_check(false, "Station candidate generation produces a recruitable roster")
+
+	var field: Node2D = _run.space.flight_field
+	voyage.set_computer("zoom", 2)
+	_check(is_equal_approx(field.world_to_screen(voyage.ship_position + Vector2(100, 0)).x
+		- field.world_to_screen(voyage.ship_position).x, 62.0), "The far camera shows more world without moving its center")
+	for module in ["pilot", "shield", "weapons"]:
+		voyage.set_computer(module, 3)
+	var before := voyage.deck.power.energy
+	var draw := voyage.computer.overload_draw()
+	voyage._physics_process(0.1)
+	_check(draw > 0.0 and is_equal_approx(before - voyage.deck.power.energy, draw * 0.1),
+		"Memory overload drains energy at the allocation-dependent rate")
+
+	var item: Voyage.Adventure.SalvageCrate = voyage.adventure.containers[voyage.current_system][0]
+	voyage.toggle_docking()
+	voyage.heading = 0.0
+	voyage.ship_position = Vector2(-2200, -1000)
+	item.position = voyage.ship_position + Vector2(37, 0)
+	item.body.velocity = Vector2.ZERO
+	voyage.velocity = Vector2(40, 0)
+	voyage._advance_salvage(0.01)
+	_check(item.body.velocity.x > 0.0, "A container receives momentum when bumped by the ship")
 
 
 func _train_until_next(action: String, limit: int) -> void:
@@ -391,7 +459,7 @@ func _test_inertia_and_pause() -> void:
 	await physics_frame
 	_check(_run.mode == Run.Mode.MAP and paused and _voyage.ship_position == position,
 		"Sector map freezes the voyage")
-	_key(KEY_ESCAPE)
+	_key(KEY_M)
 	_check(_run.mode == Run.Mode.DECK and paused, "Closing the map restores the previous screen and pause")
 	_key(KEY_SPACE)
 	_key(KEY_TAB)
@@ -438,7 +506,7 @@ func _test_unbounded_flight_and_weapon() -> void:
 	await physics_frame
 	await physics_frame
 	_check(projectile.position == start, "Opening the map freezes live projectiles")
-	_key(KEY_ESCAPE)
+	_key(KEY_M)
 	_tick(30)
 	_check(projectile.velocity == initial_velocity
 		and projectile.position.is_equal_approx(start + initial_velocity * (30 * TICK)),

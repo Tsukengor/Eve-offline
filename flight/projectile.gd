@@ -10,6 +10,7 @@ const Deck = preload("res://deck/deck_simulation.gd")
 @export var sprite_size := 20.0
 
 var hostile := false
+var automated := false
 var damage := 0.0
 var breach_chance := 0.0
 var crew_damage := 0.0

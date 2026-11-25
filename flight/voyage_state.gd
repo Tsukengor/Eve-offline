@@ -4,6 +4,7 @@ signal changed
 signal weapon_fired(kind: int)
 signal defeat_started
 
+const Computer = preload("res://flight/flight_computer.gd")
 const Adventure = preload("res://flight/adventure.gd")
 const DeckSimulation = preload("res://deck/deck_simulation.gd")
 const WeaponProfile = preload("res://flight/weapon_profile.gd")
@@ -122,7 +123,7 @@ var thrusting := false
 var docked := false
 var manual_control := true
 var simulation_speed := 1.0
-var flight_computer := true
+var computer := Computer.new()
 var scan_enemy := false
 var incident_seen := false
 var notice := ""
@@ -340,6 +341,15 @@ func route_cost(destination: int) -> int:
 	return 0
 
 
+func route_distance(destination: int) -> int:
+	var distances := {current_system: 0}
+	for pass_index in system_count() - 1:
+		for route: Vector3i in routes():
+			distances[route.y] = mini(distances.get(route.y, 9999), distances.get(route.x, 9999) + route.z)
+			distances[route.x] = mini(distances.get(route.x, 9999), distances.get(route.y, 9999) + route.z)
+	return distances.get(destination, 9999)
+
+
 func jump_blocker(destination: int) -> String:
 	if docking_time > 0.0:
 		return "Дождитесь завершения стыковки."
@@ -503,13 +513,16 @@ func _physics_process(delta: float) -> void:
 		_advance_defeat(delta)
 		return
 	_apply_ion_hazards(delta)
+	var draw := computer.overload_draw() * delta
+	deck.power.spend(minf(deck.power.energy, draw))
 	if not in_arena:
 		station_body.heading = wrapf(station_body.heading + station_body.spin * delta, -PI, PI)
 	var firing := (manual_control and not docked and docking_time <= 0.0 and stage != Stage.COMPLETE
 		and battle_result.is_empty() and Input.is_action_pressed("flight_fire"))
-	if not firing:
+	if not firing or weapon_efficiency() <= 0.0:
 		stop_laser()
-		_laser_spent = false
+		if not firing:
+			_laser_spent = false
 	var steering := 0.0
 	var forward_thrust := false
 	var braking := false
@@ -519,7 +532,8 @@ func _physics_process(delta: float) -> void:
 		braking = Input.is_action_pressed("flight_brake")
 
 	var stabilized := manual_control and Input.is_action_pressed("flight_stabilize")
-	var changed_shield := body.shield.advance(delta, deck.operator_at(DeckSimulation.WorkPose.SHIELD) != null)
+	var shield_efficiency := _shield_efficiency()
+	var changed_shield := body.shield.advance(delta, shield_efficiency > 0.0, shield_efficiency)
 	var changed_flight := advance_flight(delta, steering, forward_thrust, braking, stabilized)
 	var changed_battle := _advance_battle(delta)
 	if not battle_result.is_empty():
@@ -528,13 +542,14 @@ func _physics_process(delta: float) -> void:
 	if not in_arena:
 		_advance_station(delta)
 	var changed_wrecks := _advance_wrecks(delta)
+	var changed_loot := _advance_salvage(delta)
 	var channeling := weapon != null and weapon.kind == WeaponProfile.Kind.LASER
 	if firing and channeling:
 		fire()
 	var changed_weapons := _advance_weapons(delta)
 	if firing and not channeling and fire():
 		return # Firing already notified the view.
-	if changed_flight or changed_weapons or changed_battle or changed_wrecks or changed_shield or not in_arena:
+	if changed_flight or changed_weapons or changed_battle or changed_wrecks or changed_loot or changed_shield or not in_arena:
 		changed.emit()
 
 
@@ -547,6 +562,8 @@ func advance_flight(delta: float, steering: float, forward_thrust: bool, braking
 	var previous_angular := angular_velocity
 	var had_visuals := not body.active.is_empty()
 	var pilot := deck.pilot_efficiency()
+	if pilot <= 0.0 and deck.module_online(deck.bridge_tile):
+		pilot = _automated_efficiency("pilot") * deck.hull.condition(deck.bridge_tile)
 	var engine_online := deck.module_online(deck.engine_tile)
 	var engine := deck.hull.condition(deck.engine_tile) if engine_online else 0.0
 	var drive := lerpf(0.38, 1.0, deck.engine_health) * engine * pilot
@@ -555,8 +572,9 @@ func advance_flight(delta: float, steering: float, forward_thrust: bool, braking
 		turn_input = 0.0
 	var main := drive if forward_thrust and not braking else 0.0
 	var brake := engine * pilot if braking else 0.0
+	var assistance: bool = computer.levels.assist > 0
 	var supply := body.advance(delta, main, turn_input, brake,
-		engine_online and pilot > 0.0 and (stabilized or braking and flight_computer), flight_computer)
+		engine_online and pilot > 0.0 and (stabilized or braking and assistance), assistance)
 	thrusting = main > 0.0 and supply > 0.0
 	if thrusting:
 		velocity = velocity.limit_length(maxf(MAX_SPEED * drive, previous_velocity.length()))
@@ -583,7 +601,7 @@ func weapon_status() -> String:
 		return "Не установлено"
 	if not deck.module_online(deck.weapons_tile):
 		return "Орудие отключено"
-	if not deck.weapons_are_manned():
+	if weapon_efficiency() <= 0.0:
 		return "Пост свободен"
 	if docked or docking_time > 0.0 or stage == Stage.COMPLETE or not battle_result.is_empty():
 		return "Заблокировано"
@@ -597,7 +615,8 @@ func weapon_status() -> String:
 func fire() -> bool:
 	if weapon == null or weapon.projectile == null or docked or docking_time > 0.0 or stage == Stage.COMPLETE or not battle_result.is_empty():
 		return false
-	if deck.disabled() or not deck.weapons_are_manned():
+	var efficiency := weapon_efficiency()
+	if deck.disabled() or efficiency <= 0.0:
 		return false
 	var is_laser := weapon.kind == WeaponProfile.Kind.LASER
 	if is_laser:
@@ -607,7 +626,9 @@ func fire() -> bool:
 		return false
 	var gunner := deck.operator_at(deck.WorkPose.WEAPONS)
 	var spread := (1.0 - deck.hull.condition(deck.weapons_tile)) * weapon.damaged_spread_degrees
-	if gunner.role != "Наводчик":
+	if gunner == null:
+		spread += (1.0 - efficiency) * 20.0
+	elif gunner.role != "Наводчик":
 		spread += 5.0
 	var angle := heading + deg_to_rad(randf_range(-spread, spread))
 	var mount := body.model.muzzle
@@ -616,13 +637,15 @@ func fire() -> bool:
 		return false
 	if is_laser:
 		laser_beam = projectiles.back()
+		laser_beam.automated = gunner == null
+		laser_beam.damage *= efficiency
 	else:
 		deck.power.spend(weapon.energy_cost)
 		weapon_fired.emit(weapon.kind)
 	flash_direction = Vector2.from_angle(angle)
 	flash_remaining = FLASH_SECONDS if weapon.kind in [WeaponProfile.Kind.KINETIC, WeaponProfile.Kind.MISSILE, WeaponProfile.Kind.RAIL] else 0.0
 	if not is_laser:
-		weapon_cooldown = weapon.cooldown
+		weapon_cooldown = weapon.cooldown / efficiency
 	changed.emit()
 	return true
 
@@ -708,7 +731,7 @@ func _advance_battle(delta: float) -> bool:
 					away = Vector2.UP
 				var at := hostile.position + away.orthogonal() * 46.0
 				var kind: int = Adventure.ENCOUNTERS[current_system][hostile.encounter_slot]
-				adventure.record_defeat(current_system, hostile.encounter_slot, at, kind)
+				adventure.record_defeat(current_system, hostile.encounter_slot, at, kind, hostile.velocity * 0.55)
 			notice = "%s выведен из строя." % hostile.call_sign
 			if hostile != _cascade_enemy:
 				hostile.queue_free()
@@ -834,6 +857,8 @@ func _advance_wrecks(delta: float) -> bool:
 
 
 func _resolve_wreck_contact(ship: Physics.Body, obstacle: Physics.Body) -> void:
+	if ship.position.distance_squared_to(obstacle.position) > (ship.shield_radius() + obstacle.shield_radius()) ** 2:
+		return
 	var contact := Physics.contact(ship, obstacle)
 	if contact != null:
 		Physics.resolve(ship, obstacle, contact, 0.16)
@@ -893,10 +918,15 @@ func start_adventure(continue_saved: bool) -> void:
 	_apply_adventure_upgrades()
 	weapon = TEST_WEAPONS[adventure.slots[adventure.equipped]]
 	_sync_freight()
+	computer = Computer.new()
 	if restored:
-		for index in adventure.crew_health.size():
-			if adventure.crew_health[index] <= 0.0:
-				deck._hurt_crew(deck.crew[index], 100.0)
+		computer.restore(adventure.computer_settings)
+		if adventure.roster.is_empty():
+			for index in adventure.crew_health.size():
+				if adventure.crew_health[index] <= 0.0:
+					deck._hurt_crew(deck.crew[index], 100.0)
+		else:
+			deck.restore_roster(adventure.roster)
 	_moor_at_checkpoint()
 	notice = "Загружено сохранение на станции." if restored else "Откройте верфь, чтобы взять первый контракт."
 	if not continue_saved:
@@ -954,6 +984,75 @@ func _apply_ion_hazards(delta: float) -> void:
 			hostile.deck.power.spend(minf(hostile.deck.power.energy, 13.0 * delta))
 
 
+func _advance_salvage(delta: float) -> bool:
+	if adventure == null:
+		return false
+	var crates: Array = adventure.containers.get(current_system, [])
+	for index in crates.size():
+		var crate: Adventure.SalvageCrate = crates[index]
+		var cargo := crate.body
+		cargo.position += cargo.velocity * delta
+		cargo.heading = wrapf(cargo.heading + cargo.spin * delta, -PI, PI)
+		_resolve_wreck_contact(body, cargo)
+		_resolve_wreck_contact(station_body, cargo)
+		for hostile in enemies:
+			_resolve_wreck_contact(hostile.body, cargo)
+		for wreck in wrecks:
+			if wreck.collider != null:
+				_resolve_wreck_contact(wreck.collider, cargo)
+		for other in range(index):
+			_resolve_wreck_contact(crates[other].body, cargo)
+	return not crates.is_empty()
+
+
+func set_computer(module: String, level: int) -> void:
+	if not computer.configure(module, level):
+		return
+	if not scanner_available():
+		scan_enemy = false
+	if adventure != null and docked:
+		_save_adventure()
+	changed.emit()
+
+
+func scanner_available() -> bool:
+	return computer.levels.scanner > 0
+
+
+func _automated_efficiency(module: String) -> float:
+	return computer.efficiency(module) if deck.power.energy > 0.5 else 0.0
+
+
+func weapon_efficiency() -> float:
+	if not deck.module_online(deck.weapons_tile):
+		return 0.0
+	return 1.0 if deck.weapons_are_manned() else _automated_efficiency("weapons")
+
+
+func _shield_efficiency() -> float:
+	if deck.shield_tile == deck.INVALID_CELL or not deck.module_online(deck.shield_tile):
+		return 0.0
+	return 1.0 if deck.operator_at(DeckSimulation.WorkPose.SHIELD) != null else _automated_efficiency("shield")
+
+
+func hire_recruit(id: int) -> bool:
+	if adventure == null or not docked or adventure.credits < Adventure.HIRE_COST or not deck.available_berth():
+		return false
+	for candidate in adventure.candidates(current_system, DeckSimulation.SPECIALTIES.size()):
+		if candidate.id != id:
+			continue
+		if not deck.hire_member(candidate.name, candidate.specialty):
+			return false
+		if not adventure.recruited.has(current_system):
+			adventure.recruited[current_system] = []
+		adventure.recruited[current_system].append(id)
+		adventure.credits -= Adventure.HIRE_COST
+		_save_adventure()
+		changed.emit()
+		return true
+	return false
+
+
 func _inside_ion(point: Vector2) -> bool:
 	for cloud: Vector3 in ION_CLOUDS:
 		var center := station_position() + Vector2(cloud.x, cloud.y)
@@ -976,7 +1075,8 @@ func _save_adventure() -> void:
 	var health: Array[float] = []
 	for member in deck.crew:
 		health.append(member.health)
-	if adventure.save(current_system, health) != OK:
+	adventure.computer_settings = computer.levels.duplicate()
+	if adventure.save(current_system, health, deck.crew_checkpoint()) != OK:
 		notice += " Сохранение не записано."
 
 

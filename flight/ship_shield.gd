@@ -26,7 +26,7 @@ func reset() -> void:
 	pulse = 0.0
 
 
-func advance(delta: float, staffed := true) -> bool:
+func advance(delta: float, staffed := true, efficiency := 1.0) -> bool:
 	var elapsed := maxf(delay, emp_time)
 	var updated := online != staffed or elapsed > 0.0 or pulse > 0.0 or (staffed and charge < capacity)
 	online = staffed
@@ -34,7 +34,7 @@ func advance(delta: float, staffed := true) -> bool:
 	emp_time = move_toward(emp_time, 0.0, delta)
 	pulse = move_toward(pulse, 0.0, delta)
 	if online:
-		charge = minf(capacity, charge + maxf(0.0, delta - elapsed) * RECHARGE_RATE)
+		charge = minf(capacity, charge + maxf(0.0, delta - elapsed) * RECHARGE_RATE * efficiency)
 	if charge == capacity:
 		collapsed = false
 	return updated

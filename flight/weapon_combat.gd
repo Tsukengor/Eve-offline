@@ -125,7 +125,7 @@ static func _laser(shot: Projectile, delta: float, targets: Array[Target], stati
 		if target.body == shot.shooter:
 			source = target.deck
 			break
-	if source == null or source.disabled() or not source.weapons_are_manned():
+	if source == null or source.disabled() or (not source.weapons_are_manned() and not (shot.automated and source.module_online(source.weapons_tile))):
 		return false
 	var cost := minf(source.power.energy, shot.profile.laser_energy_per_second * delta)
 	if cost <= 0.0:

@@ -41,6 +41,8 @@ var obstacles: Array[Physics.Body] = []
 func _ready() -> void:
 	body.model = model
 	deck = DeckSimulation.new()
+	deck.auto_crew = true
+	deck.auto_airlock = false
 	_configure_deck()
 	add_child(deck)
 	body.power = deck.power
@@ -161,8 +163,8 @@ func _assign_crew() -> void:
 		var member := deck.crew[index]
 		if member.health <= 0.0 or member.target == deck.INVALID_CELL or member.blocked:
 			continue
-		if member.order == deck.Order.POST and member.target in [deck.reactor_tile, deck.shield_tile] and deck.hull.condition(deck.reactor_tile) < 1.0:
-			deck.assign_order(index, deck.reactor_tile)
+		if member.order == deck.Order.POST and member.target in [deck.reactor_tile, deck.shield_tile] and deck.hull.condition(member.target) < 1.0:
+			deck.assign_order(index, member.target, false, true)
 		match member.order:
 			deck.Order.POST:
 				posted[member.target] = true

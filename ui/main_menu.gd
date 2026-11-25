@@ -16,11 +16,17 @@ var _binding_buttons: Dictionary = {}
 var _capturing := ""
 var _status: Label
 var _page := "main"
+var settings_only := false
+signal settings_closed
 
 
 func _ready() -> void:
-	get_tree().paused = false
-	_show_main()
+	if settings_only:
+		process_mode = Node.PROCESS_MODE_ALWAYS
+		_show_settings()
+	else:
+		get_tree().paused = false
+		_show_main()
 
 
 func _draw() -> void:
@@ -131,7 +137,14 @@ func _show_settings() -> void:
 		sound.add_child(slider)
 	_status = _text("Выбери действие, чтобы назначить клавишу.", 15, DIM)
 	_panel.add_child(_status)
-	_menu_button(_panel, "Назад", _show_main, Vector2(130, 42)).size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	_menu_button(_panel, "Назад", _close_settings, Vector2(130, 42)).size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+
+
+func _close_settings() -> void:
+	if settings_only:
+		settings_closed.emit()
+	else:
+		_show_main()
 
 
 func _volume_changed(value: float, bus: String, label: Label) -> void:
@@ -171,8 +184,8 @@ func _input(event: InputEvent) -> void:
 		_status.text = "Клавиша назначена."
 		_settings.save_settings()
 	elif event.physical_keycode == KEY_ESCAPE and _page != "main":
-		_show_main()
 		get_viewport().set_input_as_handled()
+		_close_settings()
 
 
 func _start(session: Run.Session, resume := false) -> void:

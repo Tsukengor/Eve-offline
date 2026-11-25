@@ -35,6 +35,14 @@ const WORKSTATION_PASS_OFFSET := 0.42
 const DOOR_SECONDS := 0.30
 const TRAFFIC_WEIGHT := 2.5
 
+const CREW_LIMIT := 6
+const SPECIALTIES := [
+	{"role": "Пилот", "color": Color("#90c8ff"), "skin": 0},
+	{"role": "Инженер", "color": Color("#f7bf79"), "skin": 1},
+	{"role": "Спасатель", "color": Color("#78ead0"), "skin": 2},
+	{"role": "Наводчик", "color": Color("#d6a4fa"), "skin": 3},
+]
+
 
 class Door:
 	var wants_open: bool
@@ -53,6 +61,8 @@ class CrewMember:
 	var title: String
 	var role: String
 	var color: Color
+	var skin := 0
+	var specialty := 0
 	var cell: Vector2i
 	var position: Vector2
 	var target := INVALID_CELL
@@ -66,6 +76,7 @@ class CrewMember:
 	var health := 100.0
 	var gait := 0.0
 	var repair_phase := 0.0
+	var resume_post := INVALID_CELL
 
 	func _init(member_name: String, member_role: String, tint: Color, start: Vector2i) -> void:
 		title = member_name
@@ -130,6 +141,9 @@ var _transits: Array[Transit] = []
 var hull := Hull.new()
 var floor_bounds := Rect2()
 var damage_enabled := true
+var auto_crew := false
+var auto_airlock := true
+var _crew_check := 0.0
 var alerts: Dictionary[int, float] = {}
 var emp_timers: Dictionary[int, float] = {}
 var emp_recovery_time := 0.0
@@ -231,6 +245,8 @@ func reset(for_flight := false) -> void:
 		CrewMember.new("Ива", "Наводчик", Color("#d6a4fa"), _spawns[3]),
 	])
 	for index in range(crew.size()):
+		crew[index].skin = index
+		crew[index].specialty = index
 		assert(_grid.has_point(_id(crew[index].cell)) and tile_kind(crew[index].cell) == ["B", "E", "S", "W"][index],
 			"Crew spawn must be on the floor of the assigned compartment")
 	crew[0].target = bridge_tile
@@ -259,6 +275,86 @@ func reset(for_flight := false) -> void:
 	engine_health = 1.0 if for_flight else 0.0
 	airlock_progress = 0.0
 	notice = "" if for_flight else "Двигатель отключён. Назначьте ремонт."
+	changed.emit()
+
+
+func available_berth() -> bool:
+	return crew.size() < CREW_LIMIT or crew.any(func(member: CrewMember) -> bool: return member.health <= 0.0)
+
+
+func hire_member(title: String, specialty: int) -> bool:
+	if not available_berth() or specialty < 0 or specialty >= SPECIALTIES.size():
+		return false
+	var spawn := _free_berth()
+	if spawn == INVALID_CELL:
+		return false
+	var profile: Dictionary = SPECIALTIES[specialty]
+	var recruit := CrewMember.new(title, profile.role, profile.color, spawn)
+	recruit.skin = profile.skin
+	recruit.specialty = specialty
+	for index in crew.size():
+		if crew[index].health <= 0.0:
+			crew[index] = recruit
+			changed.emit()
+			return true
+	crew.append(recruit)
+	changed.emit()
+	return true
+
+
+func _free_berth() -> Vector2i:
+	var nearest := INVALID_CELL
+	var distance := INF
+	for tile: Vector2i in hull.room_at:
+		if tile in module_cells or _occupant(tile) != null or _reserved(tile):
+			continue
+		var separation := float(tile.distance_squared_to(airlock_tile))
+		if separation < distance:
+			distance = separation
+			nearest = tile
+	return nearest
+
+
+func crew_checkpoint() -> Array:
+	var roster: Array = []
+	for member in crew:
+		roster.append({"title": member.title, "specialty": member.specialty, "cell": member.cell, "position": member.position,
+			"health": member.health, "target": member.target, "order": member.order})
+	return roster
+
+
+func restore_roster(roster: Array) -> void:
+	if roster.size() < 4:
+		return
+	var restored: Array[CrewMember] = []
+	var occupied := {}
+	for data in roster.slice(0, CREW_LIMIT):
+		if not data is Dictionary or not data.get("cell") is Vector2i or not data.get("title") is String:
+			return
+		var specialty: Variant = data.get("specialty", 0)
+		if not specialty is int or specialty < 0 or specialty >= SPECIALTIES.size():
+			return
+		var health := clampf(float(data.get("health", 100.0)), 0.0, 100.0)
+		var tile: Vector2i = data.cell
+		if health > 0.0 and (not hull.room_at.has(tile) or tile in module_cells or occupied.has(tile)):
+			return
+		var profile: Dictionary = SPECIALTIES[specialty]
+		var member := CrewMember.new(data.title.substr(0, 22), profile.role, profile.color, tile)
+		member.specialty = specialty
+		member.skin = profile.skin
+		member.health = health
+		if health <= 0.0 and data.get("position") is Vector2 and data.position.is_finite():
+			member.position = data.position
+		elif health > 0.0:
+			occupied[tile] = true
+			if data.get("target") is Vector2i and hull.room_at.has(data.target) and data.get("order") in Order.values():
+				member.target = data.target
+				member.order = data.order
+		restored.append(member)
+	crew = restored
+	for member in crew:
+		if member.target != INVALID_CELL:
+			_replan(member)
 	changed.emit()
 
 
@@ -435,12 +531,14 @@ func tile_kind(tile: Vector2i) -> String:
 	return plan[tile.y][tile.x]
 
 
-func assign_order(index: int, target: Vector2i, move_only := false) -> void:
+func assign_order(index: int, target: Vector2i, move_only := false, automatic := false) -> void:
 	if tile_kind(target) == ".":
 		return
 	var member := crew[index]
 	if member.health <= 0.0:
 		return
+	if not automatic:
+		member.resume_post = INVALID_CELL
 	member.target = target
 	if move_only:
 		member.order = Order.MOVE
@@ -463,6 +561,8 @@ func assign_order(index: int, target: Vector2i, move_only := false) -> void:
 			if other != member and not other.route.is_empty() and other.route.back() == member.cell:
 				_replan(other)
 	_replan_waiting_orders()
+	if automatic:
+		return
 	notice = "Цель недоступна или занята." if member.blocked else ""
 	if member.blocked and member.target == bridge_tile:
 		notice = "Кресло пилота занято."
@@ -910,6 +1010,11 @@ func _physics_process(delta: float) -> void:
 		_replan_waiting_orders()
 	updated = _advance_doors(delta) or updated
 	updated = _advance_passengers(delta) or updated
+	if auto_crew:
+		_crew_check -= delta
+		if _crew_check <= 0.0:
+			_crew_check = 0.25
+			updated = _assign_local_jobs() or updated
 	updated = _start_transits() or updated
 	var repair_rate := 0.0
 	var prepare_rate := 0.0
@@ -982,9 +1087,84 @@ func _hurt_crew(member: CrewMember, damage: float) -> bool:
 		return false
 	member.order = Order.IDLE
 	member.target = INVALID_CELL
+	member.resume_post = INVALID_CELL
 	member.route.clear()
 	member.blocked = false
+	member.cell = Vector2i(member.position.round())
+	member.landing = INVALID_CELL
+	member.squeeze = 0.0
+	for index in range(_transits.size() - 1, -1, -1):
+		var transit := _transits[index]
+		transit.yielding.erase(member)
+		transit.paths.erase(member)
+		if transit.paths.is_empty():
+			for other in transit.yielding:
+				other.position = Vector2(other.cell)
+				other.squeeze = 0.0
+			_transits.remove_at(index)
 	return true
+
+
+func _assign_local_jobs() -> bool:
+	var changed_orders := false
+	for index in crew.size():
+		var member := crew[index]
+		if member.health <= 0.0 or member.landing != INVALID_CELL or not member.route.is_empty() or member.blocked:
+			continue
+		if member.order not in [Order.IDLE, Order.POST, Order.PREPARE]:
+			continue
+		var room: int = hull.room_at.get(member.cell, -1)
+		if room < 0:
+			continue
+		var breach := _local_breach(member, room)
+		if breach != INVALID_CELL:
+			if member.order in [Order.POST, Order.PREPARE]:
+				member.resume_post = member.target
+			assign_order(index, breach, false, true)
+			changed_orders = true
+			continue
+		if member.order != Order.IDLE:
+			continue
+		var preferred := member.resume_post
+		member.resume_post = INVALID_CELL
+		for target: Vector2i in [preferred] + module_cells:
+			if target == airlock_tile and not auto_airlock:
+				continue
+			if hull.room_at.get(target, -1) != room or (target == engine_tile and engine_health == 1.0 and hull.condition(target) == 1.0):
+				continue
+			if crew.any(func(other: CrewMember) -> bool:
+				return (other != member and other.health > 0.0 and other.target == target
+					and other.order in [Order.POST, Order.PREPARE, Order.REPAIR, Order.REPAIR_ROOM])):
+				continue
+			assign_order(index, target, false, true)
+			if not member.blocked and member.order != Order.MOVE:
+				changed_orders = true
+				break
+			member.order = Order.IDLE
+			member.target = INVALID_CELL
+			member.route.clear()
+			member.blocked = false
+	return changed_orders
+
+
+func _local_breach(member: CrewMember, room: int) -> Vector2i:
+	var nearest := INVALID_CELL
+	var best := INF
+	for tile in hull.breaches:
+		if hull.room_at.get(tile, -1) != room or crew.any(func(other: CrewMember) -> bool:
+			return other.health > 0.0 and other.order == Order.SEAL and other.target == tile):
+			continue
+		var reachable := false
+		for step in CARDINAL_STEPS:
+			var stand: Vector2i = tile + step
+			if hull.room_at.get(stand, -1) == room and edge_between(tile, stand) not in walls and _goal_available(stand, member, false) and not _path(member.cell, stand).is_empty():
+				reachable = true
+				break
+		var distance := float(member.cell.distance_squared_to(tile))
+		if reachable and distance < best:
+			nearest = tile
+			best = distance
+	return nearest
 
 
 func _service_hull(member: CrewMember, delta: float) -> void:

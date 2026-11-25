@@ -18,6 +18,7 @@ func _initialize() -> void:
 func _test() -> void:
 	_game = GAME.instantiate()
 	root.add_child(_game)
+	_game.voyage.deck.auto_crew = false
 	_check(_game.voyage.deck.load_layout("res://tests/rescue_corridor_fixture.json").is_empty(), "Load the damage fixture")
 	_check_pressure_links()
 	_check_damage_and_repairs()

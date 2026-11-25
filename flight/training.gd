@@ -13,7 +13,7 @@ func reset(voyage: Voyage) -> void:
 	_voyage = voyage
 	_voyage.training_can_dock = false
 	_voyage.deck.damage_enabled = true
-	_voyage.flight_computer = true
+	_voyage.computer.configure("assist", 1)
 	_voyage.heading -= 0.35
 	_initial_heading = _voyage.heading
 	_target = null

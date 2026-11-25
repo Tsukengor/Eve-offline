@@ -8,13 +8,17 @@ signal dismissed
 var voyage: Voyage
 var _body: VBoxContainer
 var _docked_at_open := false
-var _workshop := false
+var _tab := 0
+var _show_completed := false
+var _sort := 0
+var _type := 0
+var _status := 0
 
 
 func present(game: Voyage, workshop: bool) -> void:
 	voyage = game
 	_docked_at_open = voyage.docked
-	_workshop = workshop and _docked_at_open
+	_tab = 1 if workshop and _docked_at_open else 0
 	_rebuild()
 	show()
 
@@ -29,10 +33,12 @@ func _rebuild() -> void:
 	var top := HBoxContainer.new()
 	top.add_theme_constant_override("separation", 8)
 	content.add_child(top)
-	var jobs := _button(top, "Контракты", _open_tab.bind(false))
-	var workshop := _button(top, "Верфь", _open_tab.bind(true), _docked_at_open)
-	var selected := workshop if _workshop else jobs
-	selected.add_theme_stylebox_override("normal", _button_style(Color("#203c4e"), Color("#78ead0")))
+	var tabs := [
+		_button(top, "Контракты", _open_tab.bind(0)),
+		_button(top, "Верфь", _open_tab.bind(1), _docked_at_open),
+		_button(top, "Экипаж", _open_tab.bind(2), _docked_at_open),
+	]
+	tabs[_tab].add_theme_stylebox_override("normal", _button_style(Color("#203c4e"), Color("#78ead0")))
 	var wallet := _line("Кредиты %d   ·   Детали %d" % [voyage.adventure.credits, voyage.adventure.parts], 18)
 	wallet.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	wallet.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -47,27 +53,37 @@ func _rebuild() -> void:
 	_body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_body.add_theme_constant_override("separation", 6)
 	scroll.add_child(_body)
-	if _workshop:
-		_build_workshop()
-	else:
-		_build_contracts()
+	match _tab:
+		1: _build_workshop()
+		2: _build_recruitment()
+		_: _build_contracts()
 
 
-func _open_tab(workshop: bool) -> void:
-	if workshop == _workshop:
-		return
-	_workshop = workshop
-	_rebuild()
+func _open_tab(tab: int) -> void:
+	if tab != _tab:
+		_tab = tab
+		_rebuild()
 
 
 func _build_contracts() -> void:
 	var save := voyage.adventure
-	var listed := false
-	for index in Adventure.CONTRACTS.size():
+	var filters := HBoxContainer.new()
+	filters.add_theme_constant_override("separation", 10)
+	_body.add_child(filters)
+	var check := CheckBox.new()
+	check.text = "Показывать выполненные"
+	check.set_pressed_no_signal(_show_completed)
+	check.toggled.connect(func(value: bool) -> void:
+		_show_completed = value
+		_rebuild())
+	filters.add_child(check)
+	_filter(filters, ["Сначала новые", "Сначала ценные", "Ближайшие"], _sort, func(value: int) -> void: _sort = value)
+	_filter(filters, ["Все типы", "Доставка", "Бой"], _type, func(value: int) -> void: _type = value)
+	_filter(filters, ["Все статусы", "Доступные", "В работе"], _status, func(value: int) -> void: _status = value)
+	_body.add_child(HSeparator.new())
+	var matches := _filtered_contracts()
+	for index in matches:
 		var job: Dictionary = Adventure.CONTRACTS[index]
-		if job.from != voyage.current_system and index not in save.accepted:
-			continue
-		listed = true
 		var row := HBoxContainer.new()
 		row.add_theme_constant_override("separation", 20)
 		_body.add_child(row)
@@ -87,8 +103,69 @@ func _build_contracts() -> void:
 		else:
 			_button(row, "Принять", _perform.bind(voyage.accept_contract.bind(index)), voyage.docked)
 		_body.add_child(HSeparator.new())
-	if not listed:
-		_body.add_child(_line("Открытых контрактов нет. Новые задания доступны у «Маяка», «Перевала» и «Каскада».", 18))
+	if matches.is_empty():
+		_body.add_child(_line("Нет контрактов, подходящих под фильтры.", 18))
+
+
+func _filter(parent: Container, values: Array, selected: int, update: Callable) -> void:
+	var picker := OptionButton.new()
+	for value in values:
+		picker.add_item(value)
+	picker.select(selected)
+	picker.item_selected.connect(func(index: int) -> void:
+		update.call(index)
+		_rebuild())
+	parent.add_child(picker)
+
+
+func _filtered_contracts() -> Array[int]:
+	var save := voyage.adventure
+	var matches: Array[int] = []
+	var distance := {}
+	for index in Adventure.CONTRACTS.size():
+		var job: Dictionary = Adventure.CONTRACTS[index]
+		var active := index in save.accepted
+		var done := index in save.settled
+		if (job.from != voyage.current_system and not active) or (done and not _show_completed):
+			continue
+		if (_type == 1 and job.battle) or (_type == 2 and not job.battle):
+			continue
+		if (_status == 1 and active) or (_status == 2 and (not active or done)):
+			continue
+		matches.append(index)
+		distance[index] = voyage.route_distance(job.to)
+	matches.sort_custom(func(a: int, b: int) -> bool:
+		if _sort == 1 and Adventure.CONTRACTS[a].credits != Adventure.CONTRACTS[b].credits:
+			return Adventure.CONTRACTS[a].credits > Adventure.CONTRACTS[b].credits
+		if _sort == 2 and distance[a] != distance[b]:
+			return distance[a] < distance[b]
+		if _sort == 0:
+			var a_new := a not in save.accepted
+			var b_new := b not in save.accepted
+			if a_new != b_new:
+				return a_new
+			if not a_new:
+				return save.accepted.find(a) > save.accepted.find(b)
+		return a > b)
+	return matches
+
+
+func _build_recruitment() -> void:
+	var crew := voyage.deck
+	_body.add_child(_line("Экипаж   %d / %d" % [crew.crew_alive(), crew.CREW_LIMIT], 22))
+	var candidates := voyage.adventure.candidates(voyage.current_system, crew.SPECIALTIES.size())
+	if candidates.is_empty():
+		_body.add_child(_line("На этой станции сейчас нет кандидатов.", 17))
+	for candidate in candidates:
+		var row := HBoxContainer.new()
+		_body.add_child(row)
+		var profile: Dictionary = crew.SPECIALTIES[candidate.specialty]
+		var title := _line("%s   ·   %s" % [candidate.name, profile.role], 17)
+		title.add_theme_color_override("font_color", profile.color)
+		title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(title)
+		_button(row, "Нанять за %d кр." % Adventure.HIRE_COST, _perform.bind(voyage.hire_recruit.bind(candidate.id)),
+			crew.available_berth() and voyage.adventure.credits >= Adventure.HIRE_COST)
 
 
 func _build_workshop() -> void:

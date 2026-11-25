@@ -3,6 +3,7 @@ extends Node2D
 const Voyage = preload("res://flight/voyage_state.gd")
 const SpaceDisplay = preload("res://flight/space_display.gd")
 const DeckDisplay = preload("res://deck/deck_view.gd")
+const ComputerPanel = preload("res://ui/computer_panel.gd")
 const AdventurePanel = preload("res://ui/adventure_panel.gd")
 const Training = preload("res://flight/training.gd")
 const SHOT_SOUND := preload("res://assets/audio/shot.wav")
@@ -41,7 +42,11 @@ var _nav: Array[Button] = []
 var _space_pause: Button
 var _space_reset: Button
 var _action: Button
-var _menu_button: Button
+var _pause_overlay: ColorRect
+var _computer_panel: ComputerPanel
+var _computer_was_paused := false
+var _pause_was_paused := false
+var _settings_overlay: Control
 var _computer_button: Button
 var _spawn_missile_fighter: Button
 var _spawn_swarm: Button
@@ -63,11 +68,10 @@ func _ready() -> void:
 	for index in range(labels.size()):
 		_nav.append(_button(labels[index], Vector2(496 + index * 97, 46), Vector2(90, 42),
 			_navigate.bind(index), true))
-	_menu_button = _button("Меню", Vector2(388, 46), Vector2(100, 42), _return_to_menu)
 	_space_pause = _button("Пауза", Vector2(796, 46), Vector2(164, 42), _toggle_pause)
 	_space_reset = _button("Сброс", Vector2(972, 46), Vector2(116, 42), _reset)
 	_action = _button("Стыковка", Vector2(816, 538), Vector2(252, 40), _interact)
-	_computer_button = _button("Борткомпьютер", Vector2(32, 651), Vector2(200, 34), _toggle_computer)
+	_computer_button = _button("Бортовой компьютер", Vector2(32, 651), Vector2(200, 34), _open_computer)
 	_scan_button = _button("Сканер", Vector2(244, 651), Vector2(165, 34), _toggle_scan)
 	_scan_next = _button("Другая цель", Vector2(422, 651), Vector2(135, 34), _cycle_scan)
 	_weapon_select = OptionButton.new()
@@ -87,6 +91,7 @@ func _ready() -> void:
 	deck.simulation.damage_alert.connect(_show_alert)
 	voyage.in_arena = session == Session.ARENA
 	voyage.in_training = session == Session.TRAINING
+	deck.simulation.auto_crew = not voyage.in_training
 	for kind in SHOT_SOUNDS:
 		var audio := AudioStreamPlayer.new()
 		audio.bus = &"Weapons"
@@ -120,7 +125,10 @@ func _ready() -> void:
 func _navigate(destination: Mode) -> void:
 	if not voyage.battle_result.is_empty():
 		return
+	if _pause_overlay.visible or is_instance_valid(_settings_overlay):
+		return
 	_close_journal()
+	_close_computer()
 	if destination == Mode.MAP:
 		if voyage.in_arena or voyage.in_training:
 			return
@@ -156,7 +164,6 @@ func _apply_mode() -> void:
 	_space_pause.visible = mode == Mode.FLIGHT
 	_space_reset.visible = mode != Mode.DECK
 	_action.visible = mode != Mode.DECK and not voyage.in_arena
-	_menu_button.position = Vector2(972, 651) if mode == Mode.DECK else Vector2(388, 46)
 	_nav[Mode.MAP].disabled = voyage.in_arena or voyage.in_training
 	if not voyage.manual_control:
 		voyage.stop_laser()
@@ -183,8 +190,7 @@ func _refresh() -> void:
 	if _slot_button.visible:
 		_slot_button.text = "%d · %s" % [voyage.adventure.equipped + 1, voyage.weapon.title]
 	_computer_button.visible = mode == Mode.FLIGHT and not lost
-	_computer_button.text = "БК: включён" if voyage.flight_computer else "БК: выключен"
-	_scan_button.visible = mode == Mode.FLIGHT and not lost and is_instance_valid(voyage.enemy)
+	_scan_button.visible = mode == Mode.FLIGHT and not lost and voyage.scanner_available() and is_instance_valid(voyage.enemy)
 	_scan_button.text = "Скрыть сканер" if voyage.scan_enemy else "Сканер"
 	_scan_next.visible = _scan_button.visible and voyage.scan_enemy and voyage.enemies.size() > 1
 	_test_panel.visible = mode == Mode.FLIGHT and voyage.in_arena and not lost
@@ -223,7 +229,7 @@ func _select_destination(destination: int) -> void:
 
 
 func _interact() -> void:
-	if _adventure_panel.visible:
+	if _adventure_panel.visible or _computer_panel.visible or _pause_overlay.visible:
 		return
 	if mode == Mode.MAP:
 		if voyage.jump(space.selected):
@@ -233,7 +239,7 @@ func _interact() -> void:
 
 
 func _toggle_pause() -> void:
-	if mode != Mode.MAP and voyage.battle_result.is_empty() and not _adventure_panel.visible:
+	if mode != Mode.MAP and voyage.battle_result.is_empty() and not _adventure_panel.visible and not _computer_panel.visible and not _pause_overlay.visible:
 		get_tree().paused = not get_tree().paused
 		if get_tree().paused:
 			voyage.stop_laser()
@@ -242,6 +248,15 @@ func _toggle_pause() -> void:
 
 
 func _build_run_overlays() -> void:
+	_computer_panel = ComputerPanel.new()
+	_computer_panel.position = Vector2(218, 125)
+	_computer_panel.z_index = 10
+	_computer_panel.size = Vector2(684, 415)
+	_computer_panel.add_theme_stylebox_override("panel", _overlay_style())
+	_computer_panel.assigned.connect(voyage.set_computer)
+	_computer_panel.dismissed.connect(_close_computer)
+	_computer_panel.hide()
+	add_child(_computer_panel)
 	_journal_button = _button("Журнал", Vector2(594, 651), Vector2(162, 34), _open_journal)
 	_slot_button = _button("", Vector2(770, 651), Vector2(318, 34), voyage.cycle_weapon)
 	_slot_button.tooltip_text = "Сменить активное орудие"
@@ -272,6 +287,81 @@ func _build_run_overlays() -> void:
 	menu.reparent(content, false)
 	menu.custom_minimum_size.y = 34
 	_defeat_panel.hide()
+	_build_pause()
+
+
+func _build_pause() -> void:
+	_pause_overlay = ColorRect.new()
+	_pause_overlay.color = Color(0.025, 0.045, 0.07, 0.78)
+	_pause_overlay.z_index = 20
+	add_child(_pause_overlay)
+	_resize_pause()
+	get_viewport().size_changed.connect(_resize_pause)
+	var center := CenterContainer.new()
+	_pause_overlay.add_child(center)
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	var panel := PanelContainer.new()
+	panel.custom_minimum_size.x = 300
+	panel.add_theme_stylebox_override("panel", _overlay_style())
+	center.add_child(panel)
+	var buttons := VBoxContainer.new()
+	buttons.add_theme_constant_override("separation", 10)
+	panel.add_child(buttons)
+	var title := Label.new()
+	title.text = "Пауза"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 26)
+	buttons.add_child(title)
+	for item in [
+		["Продолжить", _close_pause],
+		["Настройки", _open_settings],
+		["Главное меню", _return_to_menu],
+		["Выйти из игры", get_tree().quit],
+	]:
+		var button := _button(item[0], Vector2.ZERO, Vector2.ZERO, item[1])
+		button.custom_minimum_size.y = 42
+		button.reparent(buttons, false)
+	_pause_overlay.hide()
+
+
+func _resize_pause() -> void:
+	_pause_overlay.size = get_viewport_rect().size
+	if is_instance_valid(_settings_overlay):
+		_settings_overlay.size = _pause_overlay.size
+
+
+func _open_pause() -> void:
+	_pause_was_paused = get_tree().paused
+	get_tree().paused = true
+	voyage.stop_laser()
+	_pause_overlay.show()
+	_refresh()
+
+
+func _close_pause() -> void:
+	_pause_overlay.hide()
+	get_tree().paused = _pause_was_paused
+	_refresh()
+
+
+func _open_settings() -> void:
+	if is_instance_valid(_settings_overlay):
+		return
+	_settings_overlay = load("res://ui/main_menu.tscn").instantiate()
+	_settings_overlay.set("settings_only", true)
+	_settings_overlay.z_index = 21
+	_settings_overlay.connect("settings_closed", _close_settings)
+	add_child(_settings_overlay)
+	_settings_overlay.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
+	_resize_pause()
+	_pause_overlay.hide()
+
+
+func _close_settings() -> void:
+	remove_child(_settings_overlay)
+	_settings_overlay.queue_free()
+	_settings_overlay = null
+	_pause_overlay.show()
 
 
 func _overlay_style() -> StyleBoxFlat:
@@ -305,12 +395,27 @@ func _show_defeat() -> void:
 	_apply_mode()
 
 
-func _toggle_computer() -> void:
-	voyage.flight_computer = not voyage.flight_computer
+func _open_computer() -> void:
+	if _computer_panel.visible or _adventure_panel.visible or _pause_overlay.visible:
+		return
+	_computer_was_paused = get_tree().paused
+	get_tree().paused = true
+	voyage.stop_laser()
+	_computer_panel.present(voyage.computer)
+	_refresh()
+
+
+func _close_computer() -> void:
+	if not _computer_panel.visible:
+		return
+	_computer_panel.hide()
+	get_tree().paused = _computer_was_paused
 	_refresh()
 
 
 func _toggle_scan() -> void:
+	if not voyage.scanner_available() or _computer_panel.visible:
+		return
 	voyage.scan_enemy = not voyage.scan_enemy
 	_refresh()
 
@@ -451,6 +556,8 @@ func _reset() -> void:
 	space.selected = -1
 	_alert_time = 0.0
 	_adventure_panel.hide()
+	_computer_panel.hide()
+	_pause_overlay.hide()
 	if session == Session.ADVENTURE:
 		voyage.start_adventure(true)
 	else:
@@ -461,12 +568,30 @@ func _reset() -> void:
 	_apply_mode()
 
 
+func _input(event: InputEvent) -> void:
+	if is_instance_valid(_settings_overlay):
+		return
+	if event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_ESCAPE:
+		if _adventure_panel.visible:
+			_close_journal()
+		elif _computer_panel.visible:
+			_close_computer()
+		elif _pause_overlay.visible:
+			_close_pause()
+		elif voyage.battle_result.is_empty():
+			_open_pause()
+		get_viewport().set_input_as_handled()
+	elif event is InputEventMouseButton and event.pressed and mode == Mode.FLIGHT and not get_tree().paused:
+		if event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN] and SpaceDisplay.FIELD.has_point(event.position):
+			var step := 1 if event.button_index == MOUSE_BUTTON_WHEEL_DOWN else -1
+			voyage.set_computer("zoom", clampi(voyage.computer.levels.zoom + step, 0, 2))
+			get_viewport().set_input_as_handled()
+
+
 func _unhandled_input(event: InputEvent) -> void:
 	if not (event is InputEventKey and event.pressed and not event.echo):
 		return
-	if _adventure_panel.visible:
-		if event.physical_keycode == KEY_ESCAPE:
-			_close_journal()
+	if _adventure_panel.visible or _computer_panel.visible or _pause_overlay.visible or is_instance_valid(_settings_overlay):
 		get_viewport().set_input_as_handled()
 		return
 	if not voyage.battle_result.is_empty():
@@ -477,8 +602,6 @@ func _unhandled_input(event: InputEvent) -> void:
 		_navigate(Mode.FLIGHT if mode == Mode.DECK else Mode.DECK)
 	elif event.is_action_pressed("toggle_map", false, true):
 		_navigate(Mode.MAP)
-	elif event.physical_keycode == KEY_ESCAPE and mode == Mode.MAP:
-		_leave_map(_mode_before_map)
 	elif event.is_action_pressed("tactical_pause", false, true):
 		_toggle_pause()
 	elif event.is_action_pressed("dock_ship", false, true) and mode == Mode.FLIGHT:

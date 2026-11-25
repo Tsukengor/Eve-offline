@@ -32,6 +32,7 @@ var _font := ThemeDB.fallback_font
 func refresh() -> void:
 	flight_view.visible = not map_open
 	flight_field.voyage = voyage
+	flight_field.scale = Vector2.ONE * voyage.computer.zoom() if voyage != null else Vector2.ONE
 	flight_field.queue_redraw()
 	queue_redraw()
 

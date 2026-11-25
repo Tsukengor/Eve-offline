@@ -37,6 +37,7 @@ func _run() -> void:
 	_test_workstation_poses()
 	_test_helm_exclusivity()
 	_test_pass_workstations()
+	_test_local_duties_and_casualties()
 	if _failures == 0:
 		print("Deck regression checks passed.")
 	quit(_failures)
@@ -344,3 +345,33 @@ func _test_pass_workstations() -> void:
 	_check(_sim.crew[1].squeeze == 0.0 and _sim.crew[1].position == Vector2(12, 2)
 		and _sim.workstation_pose(_sim.crew[1]) == poses.REPAIR and _sim.engine_health > 0.0,
 		"The engineer stays in the repair pose and keeps repairing")
+
+func _test_local_duties_and_casualties() -> void:
+	_sim.reset(true)
+	_sim.auto_crew = true
+	var engineer := _sim.crew[1]
+	var first := _sim.engine_tile + Vector2i.RIGHT
+	var second := _sim.engine_tile + Vector2i.LEFT
+	_sim.hull.breaches[first] = 0.6
+	_sim.hull.breaches[second] = 0.6
+	_tick(330)
+	_check(_sim.hull.breaches.is_empty(), "An idle engineer seals every reachable leak in their own room")
+
+	_sim.reset(true)
+	_sim.auto_crew = true
+	var pilot := _sim.crew[0]
+	_sim.assign_order(0, Vector2i(1, 2), true)
+	_tick(110)
+	_check(pilot.target == _sim.bridge_tile or _sim.helm_is_manned(), "A crew member in the bridge takes an empty helm")
+	_sim.reset(true)
+	_sim.auto_crew = false
+	_place(1, Vector2i(6, 5))
+	engineer = _sim.crew[1]
+	_sim.assign_order(1, Vector2i(9, 5), true)
+	_tick(7)
+	var impact_position := engineer.position
+	_check(engineer.landing != _sim.INVALID_CELL and impact_position != Vector2(engineer.cell), "The casualty is hit in transit")
+	_sim._hurt_crew(engineer, 100.0)
+	_tick(70)
+	_check(engineer.position == impact_position and engineer.landing == _sim.INVALID_CELL,
+		"A casualty remains at the exact impact position and releases the transit")

@@ -2,6 +2,10 @@ extends RefCounted
 
 const SAVE_PATH := "user://adventure.cfg"
 const VERSION := 1
+const Physics = preload("res://flight/ship_physics.gd")
+const CRATE_MODEL = preload("res://flight/models/salvage.tres")
+const HIRE_COST := 65
+const RECRUIT_NAMES := ["Саша", "Вера", "Денис", "Яна", "Олег", "Рая", "Назар", "Вика", "Лина", "Эмиль", "Зоя", "Тимур"]
 const SCRAP := 3
 const ION := 4
 const NEST := 5
@@ -41,11 +45,15 @@ const CONTRACTS := [
 ]
 
 class SalvageCrate:
-	var position: Vector2
+	var body := Physics.Body.new()
+	var position: Vector2:
+		get: return body.position
+		set(value): body.position = value
 	var credits: int
 	var parts: int
 
 	func _init(at: Vector2, payment: int, components: int) -> void:
+		body.model = CRATE_MODEL
 		position = at
 		credits = payment
 		parts = components
@@ -63,6 +71,10 @@ var settled: Array[int] = []
 var defeated: Dictionary[int, Array] = {}
 var containers: Dictionary[int, Array] = {}
 var crew_health: Array[float] = []
+var roster: Array = []
+var recruit_seed := randi()
+var recruited: Dictionary[int, Array] = {}
+var computer_settings := {}
 var saved_system := 0
 
 
@@ -75,7 +87,7 @@ func remaining(system: int) -> Array:
 	return slots_left
 
 
-func record_defeat(system: int, slot: int, at: Vector2, opponent: int) -> void:
+func record_defeat(system: int, slot: int, at: Vector2, opponent: int, drift := Vector2.ZERO) -> void:
 	if slot not in remaining(system):
 		return
 	if not defeated.has(system):
@@ -83,7 +95,10 @@ func record_defeat(system: int, slot: int, at: Vector2, opponent: int) -> void:
 	defeated[system].append(slot)
 	if not containers.has(system):
 		containers[system] = []
-	containers[system].append(SalvageCrate.new(at, [32, 27, 42, 68][opponent], 2 if opponent == 3 else 1))
+	var crate := SalvageCrate.new(at, [32, 27, 42, 68][opponent], 2 if opponent == 3 else 1)
+	crate.body.velocity = drift
+	crate.body.spin = 0.28
+	containers[system].append(crate)
 
 
 func nearest_container(system: int, at: Vector2) -> SalvageCrate:
@@ -161,19 +176,35 @@ func equip_weapon(slot: int, weapon: int) -> bool:
 	return true
 
 
-func save(system: int, health: Array[float]) -> Error:
+func candidates(system: int, specialties: int) -> Array[Dictionary]:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = recruit_seed + system * 70031
+	var count := rng.randi_range(0, 4)
+	var names := RECRUIT_NAMES.duplicate()
+	var people: Array[Dictionary] = []
+	for index in count:
+		var name_index := rng.randi_range(0, names.size() - 1)
+		var title: String = names.pop_at(name_index)
+		var specialty := rng.randi_range(0, specialties - 1)
+		if index not in recruited.get(system, []):
+			people.append({"id": index, "name": title, "specialty": specialty})
+	return people
+
+
+func save(system: int, health: Array[float], members: Array = []) -> Error:
 	var cargo := {}
 	for sector in containers:
 		var items: Array = []
 		for item: SalvageCrate in containers[sector]:
-			items.append([item.position, item.credits, item.parts])
+			items.append([item.position, item.credits, item.parts, item.body.velocity, item.body.heading, item.body.spin])
 		cargo[sector] = items
 	var config := ConfigFile.new()
 	config.set_value("checkpoint", "version", VERSION)
 	config.set_value("checkpoint", "state", {
 		"system": system, "credits": credits, "parts": parts, "unlocked": unlocked, "slots": slots,
 		"equipped": equipped, "levels": levels, "accepted": accepted, "settled": settled,
-		"defeated": defeated, "containers": cargo, "crew_health": health,
+		"defeated": defeated, "containers": cargo, "crew_health": health, "roster": members,
+		"recruit_seed": recruit_seed, "recruited": recruited, "computer": computer_settings,
 	})
 	var temporary := save_path + ".tmp"
 	var result := config.save(temporary)
@@ -221,8 +252,24 @@ func load_checkpoint(system_count: int) -> bool:
 				continue
 			containers[sector] = []
 			for item in items:
-				if item is Array and item.size() == 3 and item[0] is Vector2 and item[0].is_finite():
-					containers[sector].append(SalvageCrate.new(item[0], _number(item[1], 0), _number(item[2], 0)))
+				if item is Array and item.size() >= 3 and item[0] is Vector2 and item[0].is_finite():
+					var crate := SalvageCrate.new(item[0], _number(item[1], 0), _number(item[2], 0))
+					if item.size() == 6 and item[3] is Vector2 and item[3].is_finite() and item[4] is float and item[5] is float:
+						crate.body.velocity = item[3]
+						crate.body.heading = item[4]
+						crate.body.spin = item[5]
+					containers[sector].append(crate)
+	var saved_roster: Variant = state.get("roster")
+	if saved_roster is Array:
+		roster = saved_roster.slice(0, 6)
+	recruit_seed = int(state.get("recruit_seed", recruit_seed))
+	var signed: Variant = state.get("recruited")
+	if signed is Dictionary:
+		for system in system_count:
+			recruited[system] = _indices(signed.get(system), 4)
+	var allocations: Variant = state.get("computer")
+	if allocations is Dictionary:
+		computer_settings = allocations
 	var health: Variant = state.get("crew_health")
 	if health is Array:
 		for value in health.slice(0, 4):

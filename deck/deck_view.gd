@@ -94,19 +94,6 @@ func _ready() -> void:
 	_normal_style = _button_style(PANEL, LINE)
 	_pause_button = _make_button(Vector2(796, 46), Vector2(164, 42), _toggle_pause)
 	_make_button(Vector2(972, 46), Vector2(116, 42), _reset).text = "Сброс"
-	for index in range(simulation.crew.size()):
-		var button := _make_button(Vector2(792, 174 + index * 66), Vector2(276, 64),
-			_select.bind(index))
-		button.alignment = HORIZONTAL_ALIGNMENT_LEFT
-		button.add_theme_font_size_override("font_size", 15)
-		button.icon = CREW_SPRITES[index]
-		button.add_theme_constant_override("icon_max_width", 24)
-		button.add_theme_constant_override("h_separation", 12)
-		_crew_buttons.append(button)
-		var selected_style := _button_style(Color("#1b2d3f"), simulation.crew[index].color)
-		selected_style.set_border_width_all(0)
-		selected_style.border_width_left = 3
-		_crew_selected_styles.append(selected_style)
 	_audio = AudioStreamPlayer.new()
 	_audio.bus = &"Alerts"
 	_audio.volume_db = -8.0
@@ -197,7 +184,32 @@ func _reset() -> void:
 		reset_requested.emit()
 
 
+func _layout_crew_cards() -> void:
+	var count := simulation.crew.size()
+	if _crew_buttons.size() != count:
+		for button in _crew_buttons:
+			remove_child(button)
+			button.queue_free()
+		_crew_buttons.clear()
+		_crew_selected_styles.clear()
+		_selected = clampi(_selected, 0, count - 1)
+		var pitch := 66.0 if count <= 4 else 43.0
+		for index in count:
+			var button := _make_button(Vector2(792, 174 + index * pitch), Vector2(276, pitch - 2), _select.bind(index))
+			button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+			button.add_theme_font_size_override("font_size", 15 if count <= 4 else 12)
+			button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+			button.add_theme_constant_override("icon_max_width", 24)
+			button.add_theme_constant_override("h_separation", 12)
+			_crew_buttons.append(button)
+			var style := _button_style(Color("#1b2d3f"), simulation.crew[index].color)
+			style.set_border_width_all(0)
+			style.border_width_left = 3
+			_crew_selected_styles.append(style)
+
+
 func _refresh() -> void:
+	_layout_crew_cards()
 	if not simulation.plan.is_empty():
 		var size := Vector2(simulation.plan[0].length(), simulation.plan.size())
 		var preferred_cell := 42.0 if simulation.layout_path == DeckSimulation.RESCUE_LAYOUT else CELL
@@ -211,7 +223,11 @@ func _refresh() -> void:
 	for index in range(_crew_buttons.size()):
 		var member := simulation.crew[index]
 		var button := _crew_buttons[index]
+		button.icon = CREW_SPRITES[member.skin]
+		_crew_selected_styles[index].border_color = member.color
 		var title := "%s · %s\n%s\n%d / 100 HP" % [member.title, member.role, simulation.crew_status(member), ceili(member.health)]
+		if _crew_buttons.size() > 4:
+			title = "%s · %s\n%d HP · %s" % [member.title, member.role, ceili(member.health), simulation.crew_status(member)]
 		if button.text != title:
 			button.text = title
 		var selected := index == _selected
@@ -427,23 +443,27 @@ func _draw_deck() -> void:
 
 func _draw_crew_member(index: int) -> void:
 	var member := simulation.crew[index]
-	if member.health <= 0.0:
-		return
+	var skin := member.skin
 	var point := _crew_point(member)
+	if member.health <= 0.0:
+		draw_set_transform(point, PI * 0.5)
+		_draw_sprite(CREW_SPRITES[skin], Vector2.ZERO, 21.5, Color("#627884"))
+		draw_set_transform(Vector2.ZERO)
+		return
 	var pose := simulation.workstation_pose(member)
 	if pose == DeckSimulation.WorkPose.HELM or pose == DeckSimulation.WorkPose.WEAPONS:
-		_draw_sprite(HELM_SPRITES[index], point, 26.0)
+		_draw_sprite(HELM_SPRITES[skin], point, 26.0)
 		return
 	var direction := member.target - member.cell
 	if pose == DeckSimulation.WorkPose.REPAIR:
 		var frame := int(member.repair_phase * 9.0) % 4
-		var row := WORK_DIRECTIONS.find(direction) * 4 + index
+		var row := WORK_DIRECTIONS.find(direction) * 4 + skin
 		_draw_atlas_frame(REPAIR_FRAMES, point, 27.0, Vector2(frame, row))
 		return
 	if pose != DeckSimulation.WorkPose.NONE:
 		var atlas: Texture2D = WORK_ATLASES[DeckSimulation.WorkPose.AIRLOCK][direction]
-		var frame := Vector2(index, 0)
-		if index == DeckSimulation.GUNNER_INDEX:
+		var frame := Vector2(skin, 0)
+		if skin == DeckSimulation.GUNNER_INDEX:
 			atlas = GUNNER_WORK
 			frame = Vector2(WORK_DIRECTIONS.find(direction), 1)
 		_draw_atlas_frame(atlas, point, 27.0, frame)
@@ -453,9 +473,9 @@ func _draw_crew_member(index: int) -> void:
 	if member.landing != simulation.INVALID_CELL or squeezing:
 		var frame := int(member.gait * 4.0) % 4
 		_draw_atlas_frame(WALK_FRAMES, Vector2.ZERO, lerpf(21.5, 17.0, member.squeeze),
-			Vector2(frame, index + 4 if squeezing else index))
+			Vector2(frame, skin + 4 if squeezing else skin))
 	else:
-		_draw_sprite(CREW_SPRITES[index], Vector2.ZERO, 21.5)
+		_draw_sprite(CREW_SPRITES[skin], Vector2.ZERO, 21.5)
 	draw_set_transform(Vector2.ZERO)
 
 
