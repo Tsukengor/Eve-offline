@@ -72,13 +72,13 @@ func _offer(tag: String) -> void:
 
 
 func _install(tag: String, dialog: ConfirmationDialog) -> void:
+	dialog.hide()
 	dialog.queue_free()
 	var status := AcceptDialog.new()
 	status.title = "Обновление игры"
 	status.dialog_text = "Скачивание и проверка обновления %s…" % tag
 	status.get_ok_button().disabled = true
 	status.unresizable = true
-	status.closable = false
 	add_child(status)
 	status.popup_centered()
 	var error := await _download_build(tag)
@@ -92,7 +92,6 @@ func _install(tag: String, dialog: ConfirmationDialog) -> void:
 	status.dialog_text = error
 	status.get_ok_button().disabled = false
 	status.confirmed.connect(status.queue_free)
-	status.closable = true
 
 
 func _download_build(tag: String) -> String:

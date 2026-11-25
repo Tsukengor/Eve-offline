@@ -8,6 +8,11 @@ const Physics = Voyage.Physics
 const SCENE := preload("res://flight/run.tscn")
 const TICK := 1.0 / 60.0
 
+class RejectedUpdate extends Updater:
+	func _download_build(_tag: String) -> String:
+		return "Контрольная сумма не совпала."
+
+
 var _run: Run
 var _voyage: Voyage
 var _failures := 0
@@ -476,6 +481,17 @@ func _test_application_updates() -> void:
 	for name in [binary, pack, "build.zip"]:
 		DirAccess.remove_absolute(folder.path_join(name))
 	DirAccess.remove_absolute(folder)
+
+	var updater := RejectedUpdate.new()
+	root.add_child(updater)
+	updater._offer("v0.11.0")
+	var prompt := updater.get_child(-1) as ConfirmationDialog
+	prompt.confirmed.emit()
+	var status := updater.get_child(-1) as AcceptDialog
+	_check(not prompt.visible and status.visible and not status.get_ok_button().disabled
+		and status.dialog_text == "Контрольная сумма не совпала.",
+		"Confirming the update closes the prompt and displays a download error without restarting")
+	updater.free()
 
 
 func _test_global_shortcuts() -> void:
