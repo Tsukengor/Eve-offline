@@ -36,11 +36,95 @@ func _test() -> void:
 	_check_aim_and_inner_shield()
 	_check_fields_and_swarm()
 	_check_ship_effects()
+	_check_boarding_and_hacking()
 	_game._toggle_arena()
 	_check(_game.voyage.weapon.kind == 0, "The rescue scenario retains its kinetic weapon")
 	if _failures == 0:
 		print("Combat regression checks passed.")
 	quit(_failures)
+
+
+func _check_boarding_and_hacking() -> void:
+	_game._reset()
+	var voyage := _game.voyage
+	_check(voyage.deck.load_layout(Deck.RESCUE_LAYOUT).is_empty(), "Boarding uses the compact rescue deck")
+	var deck := voyage.deck
+	deck.auto_crew = false
+	voyage.set_test_damage(true, true)
+	var interceptor := voyage.add_test_enemy(Voyage.Opponent.INTERCEPTOR) as Voyage.Interceptor
+	_check(interceptor != null and interceptor.weapon == null and interceptor.deck.weapons_tile == Deck.INVALID_CELL
+		and interceptor.deck.teleport_tile != Deck.INVALID_CELL and interceptor.team.size() == 4,
+		"The interceptor carries four fighters and a hacker instead of guns")
+	if interceptor == null or interceptor.deck.teleport_tile == Deck.INVALID_CELL:
+		return
+	interceptor.position = voyage.ship_position + Vector2(200, 0)
+	interceptor.advance_boarding(2.0, deck, voyage.ship_position)
+	_check(deck.boarders.size() == 4 and interceptor.deck.crew.size() == 2
+		and interceptor.teleport_timer == 15.0 and voyage.computer.offline()
+		and not voyage.computer.enabled("scanner"),
+		"The first teleport transfers the whole squad and the supporting hacker interrupts the computer")
+	if deck.boarders.size() != 4:
+		return
+	var stranded := deck.boarders[0]
+	stranded.cell = Vector2i(6, 7)
+	stranded.position = Vector2(stranded.cell)
+	stranded.health = 30.0
+	interceptor.advance_boarding(1.0, deck, voyage.ship_position)
+	_check(deck.boarders.size() == 4 and stranded.retreating, "Wounded boarders retreat but the teleporter is still cooling down")
+	interceptor.advance_boarding(14.0, deck, voyage.ship_position)
+	_check(deck.boarders.size() == 1 and stranded in deck.boarders and interceptor.deck.crew.size() == 5,
+		"Extraction returns only the living fighters already in the airlock")
+	deck._advance_security(20.1)
+	_check(not voyage.computer.offline(), "Computer modules return after twenty simulation seconds")
+
+	deck.clear_boarders()
+	_check(deck.hire_member("Тестовый хакер", Deck.HACKER) and deck.establish_firewall(), "A recruited hacker can defend the entire ship")
+	var door := Deck.edge_between(Vector2i(2, 2), Vector2i(2, 3))
+	_check(not deck.receive_hack("computer", null) and not deck.receive_hack("door", door)
+		and not deck.receive_hack("room", deck.reactor_tile), "The firewall blocks every remote intrusion type")
+	deck._advance_security(24.0)
+	_check(deck.receive_hack("room", deck.reactor_tile) and deck.energy_recovery_rate() < 3.0,
+		"A reactor hack temporarily suppresses recharge")
+	deck._advance_security(21.0)
+
+	deck.reset(true)
+	_check(deck.receive_hack("door", door), "A hack takes control of a structural door")
+	deck.doors[door].wants_open = true
+	deck.doors[door].openness = 1.0
+	deck.toggle_door(door)
+	_check(deck.doors[door].lock_time == 20.0 and not deck._door_allows_step(Vector2i(2, 2), Vector2i(2, 3))
+		and deck._door_allows_step(Vector2i(2, 2), Vector2i(2, 3), 1),
+		"The lock ignores manual control and grants access to the hacking faction")
+	deck.assign_order(0, Vector2i(2, 3), true)
+	_check(not deck._crosses_edge(deck.crew[0].cell, deck.crew[0].route, door),
+		"Navigation routes through the neighboring room when detouring is faster")
+	_check(deck.force_door(0, door), "A crew member can receive an explicit door-forcing order")
+	for tick in range(340):
+		deck._physics_process(TICK)
+	_check(deck.doors[door].lock_time == 0.0 and deck.doors[door].wants_open, "A crew member breaks a locked door in five seconds of work")
+	var cargo_door := Deck.edge_between(Vector2i(8, 5), Vector2i(8, 6))
+	_check(deck.receive_hack("door", cargo_door), "The hanger door can be locked independently")
+	deck.assign_order(2, Vector2i(8, 7), true)
+	for tick in range(470):
+		deck._physics_process(TICK)
+	_check(deck.crew[2].cell == Vector2i(8, 7) and deck.doors[cargo_door].lock_time == 0.0,
+		"Crew force a hacked door automatically when no faster route exists")
+
+	deck.reset(true)
+	var gunner := deck.crew[3]
+	gunner.cell = Vector2i(6, 7)
+	gunner.position = Vector2(gunner.cell)
+	var target := deck.make_member("Абордажник", Deck.FIGHTER, Vector2i(9, 7))
+	deck.teleport_in(target, target.cell, true)
+	deck.attack_order(3, target)
+	deck._advance_combat(TICK)
+	_check(target.health == 88.0 and gunner.attack_sprite == 6, "The gunner fires a pistol from several cells away")
+	target.cell = Vector2i(7, 7)
+	target.position = Vector2(target.cell)
+	gunner.attack_cooldown = 0.0
+	deck._advance_combat(TICK)
+	_check(target.health == 83.0 and gunner.attack_sprite == 3, "The pistol is much weaker at arm's length")
+	_game._reset()
 
 
 func _check_ship_effects() -> void:

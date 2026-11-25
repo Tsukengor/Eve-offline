@@ -103,7 +103,7 @@ func _recovery_throttle() -> float:
 
 func _fly_towards(delta: float, goal_velocity: Vector2, throttle := 1.0, aim: Variant = null) -> void:
 	var pilot := deck.pilot_efficiency()
-	var drive := deck.hull.condition(deck.engine_tile) * pilot
+	var drive := deck.hull.condition(deck.engine_tile) * pilot * deck.drive_modifier()
 	if pilot <= 0.0 or not deck.module_online(deck.engine_tile):
 		body.advance(delta, 0.0, 0.0, 0.0, false)
 		return
@@ -124,7 +124,7 @@ func _fly_towards(delta: float, goal_velocity: Vector2, throttle := 1.0, aim: Va
 	# Bleed sideways drift while applying forward thrust, and brake while turning.
 	var trim := goal if aim != null or error < 0.48 else Vector2.ZERO
 	body.advance(delta, main * throttle, body.turn_toward(course, pilot) * throttle,
-		drive * 0.70 * throttle, false, true, trim)
+		drive * 0.70 * throttle, false, not deck.computer_interrupted(), trim)
 
 
 func _avoid_wrecks(goal: Vector2) -> Vector2:

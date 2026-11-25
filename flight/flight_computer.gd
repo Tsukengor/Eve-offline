@@ -15,6 +15,7 @@ const MODULES := {
 const PERFORMANCE := [0.0, 0.40, 0.65, 0.85]
 const SCALES := [1.0, 0.8, 0.62]
 
+var outage: Callable
 var levels := {"assist": 1, "pilot": 0, "shield": 0, "weapons": 0, "scanner": 1, "zoom": 0, "objects": 0, "threat": 1, "aim": 0}
 
 
@@ -42,13 +43,23 @@ func memory_used() -> int:
 
 
 func overload_draw() -> float:
+	if offline():
+		return 0.0
 	var over := maxi(0, memory_used() - MEMORY)
 	return over * (2.0 + over * 0.75)
 
 
 func efficiency(module: String) -> float:
-	return PERFORMANCE[levels[module]]
+	return 0.0 if offline() else PERFORMANCE[levels[module]]
 
 
 func zoom() -> float:
-	return SCALES[levels.zoom]
+	return 1.0 if offline() else SCALES[levels.zoom]
+
+
+func offline() -> bool:
+	return outage.is_valid() and outage.call()
+
+
+func enabled(module: String) -> bool:
+	return not offline() and levels[module] > 0

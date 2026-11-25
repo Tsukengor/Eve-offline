@@ -11,6 +11,18 @@ const CREW_SPRITES := [
 	preload("res://assets/deck/rescuer.png"),
 	preload("res://assets/deck/gunner.png"),
 ]
+const CREW_WEAPONS := preload("res://assets/deck/crew_weapons.png")
+const TELEPORT_FLASH := preload("res://assets/deck/teleport_flash.png")
+const TELEPORT_CONSOLE := preload("res://assets/deck/teleport_console.png")
+const ROLE_SPRITES := {
+	4: preload("res://assets/deck/crew_role_4.png"),
+	5: preload("res://assets/deck/crew_role_5.png"),
+	6: preload("res://assets/deck/crew_role_6.png"),
+	7: preload("res://assets/deck/crew_role_7.png"),
+	8: preload("res://assets/deck/crew_role_8.png"),
+	9: preload("res://assets/deck/crew_role_9.png"),
+	10: preload("res://assets/deck/crew_role_10.png"),
+}
 const WALK_FRAMES := preload("res://assets/deck/crew_walk.png")
 const REPAIR_FRAMES := preload("res://assets/deck/crew_repair.png")
 const CARGO_SEAT := preload("res://assets/deck/cargo_seat.png")
@@ -47,6 +59,7 @@ const FLOOR_SPRITES := {
 	"L": preload("res://assets/deck/rescue_floor_v2.png"),
 	"G": preload("res://assets/deck/cargo_floor.png"),
 	"H": preload("res://assets/deck/shield_floor.png"),
+	"T": preload("res://assets/deck/teleport_floor.png"),
 }
 const BRIDGE_SPRITE := preload("res://assets/deck/bridge_console_v2.png")
 const ENGINE_SPRITE := preload("res://assets/deck/engine.png")
@@ -227,7 +240,7 @@ func _refresh() -> void:
 	for index in range(_crew_buttons.size()):
 		var member := simulation.crew[index]
 		var button := _crew_buttons[index]
-		button.icon = CREW_SPRITES[member.skin]
+		button.icon = _crew_sprite(member)
 		var shortcut: String = _settings.key_label("crew_%d" % (index + 1))
 		button.tooltip_text = "Выбрать · " + shortcut
 		_crew_selected_styles[index].border_color = member.color
@@ -275,20 +288,36 @@ func _unhandled_input(event: InputEvent) -> void:
 		if event.button_index == MOUSE_BUTTON_LEFT:
 			_select_or_toggle(point, _settings.order_modifier(event))
 		elif event.button_index == MOUSE_BUTTON_RIGHT:
-			simulation.assign_order(_selected, tile, _settings.order_modifier(event))
+			var modifier: bool = _settings.order_modifier(event)
+			if not modifier:
+				for boarder in simulation.boarders:
+					if boarder.health > 0.0 and point.distance_to(_crew_point(boarder)) < _deck_cell * 0.5:
+						simulation.attack_order(_selected, boarder)
+						return
+				var edge := _pointed_door(point)
+				if edge != Vector4i.ZERO and simulation.force_door(_selected, edge):
+					return
+			simulation.assign_order(_selected, tile, modifier)
 
 
-func _select_or_toggle(point: Vector2, automatic: bool) -> void:
+func _pointed_door(point: Vector2) -> Vector4i:
 	for edge in simulation.doors:
 		var start := _cell_center(Vector2i(edge.x, edge.y))
 		var normal := Vector2(edge.z - edge.x, edge.w - edge.y)
 		var offset := point - (start + normal * _deck_cell * 0.5)
 		if absf(offset.dot(normal)) <= 6.0 and absf(offset.dot(normal.orthogonal())) <= _deck_cell * 0.5:
-			if automatic:
-				simulation.set_automatic(edge)
-			else:
-				simulation.toggle_door(edge)
-			return
+			return edge
+	return Vector4i.ZERO
+
+
+func _select_or_toggle(point: Vector2, automatic: bool) -> void:
+	var edge := _pointed_door(point)
+	if edge != Vector4i.ZERO:
+		if automatic:
+			simulation.set_automatic(edge)
+		else:
+			simulation.toggle_door(edge)
+		return
 	var closest := -1
 	var distance := _deck_cell * 0.45
 	for index in range(simulation.crew.size()):
@@ -308,9 +337,9 @@ func _draw() -> void:
 	_panel(Rect2(32, 126, 714, 504))
 	_panel(Rect2(772, 126, 316, 504))
 	if get_tree().paused:
-		_text("На паузе", Vector2(54, 160), 15, AMBER)
+		_text("На паузе", Vector2(625, 160), 15, AMBER)
 	elif simulation.simulation_speed < 1.0:
-		_text("Время 0,25×", Vector2(54, 160), 15, AMBER)
+		_text("Время 0,25×", Vector2(625, 160), 15, AMBER)
 	if simulation.layout_path != DeckSimulation.RESCUE_LAYOUT:
 		_text(simulation.layout_name, Vector2(54, 190), 15, MUTED)
 	_text("Экипаж", Vector2(792, 164), 21)
@@ -359,6 +388,8 @@ func _draw_floor() -> void:
 			if flash > 0.0:
 				var pulse := (0.16 + 0.23 * sin(flash * TAU * 2.0) ** 2) * minf(flash, 1.0)
 				draw_rect(bounds, Color(1.0, 0.28, 0.14, pulse))
+			if simulation.hacked(tile):
+				draw_rect(bounds, Color(0.63, 0.31, 0.83, 0.27))
 			if simulation.emp_time(tile) > 0.0:
 				draw_rect(bounds, Color(0.18, 0.50, 0.72, 0.32))
 			if air < 0.999:
@@ -398,7 +429,13 @@ func _draw_deck() -> void:
 	_draw_module(simulation.bridge_tile, BRIDGE_SPRITE, Color("#90c8ff"))
 	_draw_module(simulation.engine_tile, ENGINE_SPRITE, DANGER if simulation.engine_health < 1.0 else ACCENT)
 	_draw_module(simulation.airlock_tile, AIRLOCK_SPRITE, ACCENT if simulation.airlock_progress >= 1.0 else AMBER)
-	_draw_module(simulation.weapons_tile, WEAPONS_SPRITE, WEAPONS_COLOR if simulation.weapons_are_manned() else MUTED)
+	if simulation.weapons_tile != simulation.INVALID_CELL:
+		_draw_module(simulation.weapons_tile, WEAPONS_SPRITE, WEAPONS_COLOR if simulation.weapons_are_manned() else MUTED)
+	if simulation.teleport_tile != simulation.INVALID_CELL:
+		_draw_module(simulation.teleport_tile, TELEPORT_CONSOLE, WEAPONS_COLOR)
+	if simulation.teleport_flash > 0.0:
+		var landing := simulation.airlock_tile if simulation.teleport_tile == simulation.INVALID_CELL else simulation.teleport_tile
+		_draw_sprite(TELEPORT_FLASH, _cell_center(landing), 75.0, Color(1.0, 1.0, 1.0, simulation.teleport_flash))
 	if simulation.layout_path == DeckSimulation.RESCUE_LAYOUT:
 		_room_label("МОСТИК", Vector2i(1, 1))
 		_room_label("РЕАКТОР", Vector2i(4, 1))
@@ -447,17 +484,38 @@ func _draw_deck() -> void:
 	if selected.health > 0.0:
 		draw_circle(selected_point, 11.0 * _deck_cell / CELL, Color("#142535"), true, -1.0, true)
 		draw_arc(selected_point, 11.0 * _deck_cell / CELL, 0.0, TAU, 30, selected.color, 2.0, true)
-	for index in range(simulation.crew.size()):
-		_draw_crew_member(index)
+	for member in simulation.occupants():
+		_draw_crew_member(member)
+		if member.faction != 0 and member.health > 0.0:
+			draw_arc(_crew_point(member), _deck_cell * 0.31, 0.0, TAU, 20, DANGER, 1.5, true)
+			var bar := _crew_point(member) + Vector2(-11.0, -14.0) * _deck_cell / CELL
+			draw_line(bar, bar + Vector2(22.0 * member.health / 100.0, 0) * _deck_cell / CELL, DANGER, 2.0)
+		if member.health > 0.0 and member.attack_frame > 0.0:
+			_draw_weapon(member, member.attack_direction, member.attack_sprite, member.attack_frame / 0.28)
+		var forced := simulation._needs_to_force(member)
+		if forced != Vector4i.ZERO:
+			var center := (Vector2(forced.x, forced.y) + Vector2(forced.z, forced.w)) * 0.5
+			_draw_weapon(member, (center - Vector2(member.cell)).normalized(), 2, fposmod(member.repair_phase, 0.6))
 
 
-func _draw_crew_member(index: int) -> void:
-	var member := simulation.crew[index]
+func _crew_sprite(member: DeckSimulation.CrewMember) -> Texture2D:
+	return ROLE_SPRITES.get(member.specialty, CREW_SPRITES[member.skin])
+
+
+func _draw_weapon(member: DeckSimulation.CrewMember, direction: Vector2, frame: int, swing: float) -> void:
+	var extent := Vector2.ONE * _deck_cell * 0.64
+	var point := _crew_point(member) + direction * _deck_cell * (0.38 + 0.11 * sin(swing * PI))
+	draw_set_transform(point, direction.angle())
+	draw_texture_rect_region(CREW_WEAPONS, Rect2(-extent * 0.5, extent), Rect2(frame * 24, 0, 24, 24))
+	draw_set_transform(Vector2.ZERO)
+
+
+func _draw_crew_member(member: DeckSimulation.CrewMember) -> void:
 	var skin := member.skin
 	var point := _crew_point(member)
 	if member.health <= 0.0:
 		draw_set_transform(point, PI * 0.5)
-		_draw_sprite(CREW_SPRITES[skin], Vector2.ZERO, 21.5, Color("#627884"))
+		_draw_sprite(_crew_sprite(member), Vector2.ZERO, 21.5, Color("#627884"))
 		draw_set_transform(Vector2.ZERO)
 		return
 	var pose := simulation.workstation_pose(member)
@@ -485,7 +543,7 @@ func _draw_crew_member(index: int) -> void:
 		_draw_atlas_frame(WALK_FRAMES, Vector2.ZERO, lerpf(21.5, 17.0, member.squeeze),
 			Vector2(frame, skin + 4 if squeezing else skin))
 	else:
-		_draw_sprite(CREW_SPRITES[skin], Vector2.ZERO, 21.5)
+		_draw_sprite(_crew_sprite(member), Vector2.ZERO, 21.5)
 	draw_set_transform(Vector2.ZERO)
 
 
@@ -523,6 +581,8 @@ func _draw_door(edge: Vector4i, door: DeckSimulation.Door) -> void:
 	var tint := Color.WHITE.lerp(Color("#a4e3d4"), openness)
 	if exterior:
 		tint = AMBER if openness < 1.0 else DANGER
+	elif door.lock_time > 0.0:
+		tint = Color("#e099ff")
 	elif not door.automatic and not door.wants_open:
 		tint = Color("#f28b79")
 	var left := center.x - width * 0.5

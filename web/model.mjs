@@ -2,11 +2,11 @@ export const LIMITS = {width: 24, height: 18};
 export const ROOMS = {
   C: ['Коридор', '#233a52'], B: ['Мостик', '#254664'], E: ['Двигатели', '#553e3a'],
   S: ['Шлюз', '#285049'], W: ['Вооружение', '#51415d'], L: ['Кислород', '#275368'], R: ['Реактор', '#574a35'],
-  G: ['Грузовой отсек', '#505244'], H: ['Щит', '#325363'],
+  G: ['Грузовой отсек', '#505244'], H: ['Щит', '#325363'], T: ['Телепорт', '#423963'],
 };
 export const MODULES = {
   bridge: ['B', 'Мостик'], engine: ['E', 'Двигатели'], airlock: ['S', 'Шлюз'],
-  weapons: ['W', 'Вооружение'], life_support: ['L', 'Кислород'], reactor: ['R', 'Реактор'], shield: ['H', 'Пост щита'],
+  weapons: ['W', 'Вооружение'], life_support: ['L', 'Кислород'], reactor: ['R', 'Реактор'], shield: ['H', 'Пост щита'], teleport: ['T', 'Телепорт'],
 };
 export const STEPS = [[0,-1],[-1,0],[1,0],[0,1]];
 export const WEAPON_FIELDS = {
@@ -88,7 +88,7 @@ export function inspectLayout(data) {
   const rows = data.plan;
   const width = rows?.[0]?.length;
   if (!Array.isArray(rows) || !rows.length || rows.length > LIMITS.height || !width || width > LIMITS.width ||
-    rows.some(row => typeof row !== 'string' || row.length !== width || /[^.CBESWLRGH]/.test(row)) ||
+    rows.some(row => typeof row !== 'string' || row.length !== width || /[^.CBESWLRGHT]/.test(row)) ||
     !data.modules || typeof data.modules !== 'object' || Array.isArray(data.modules) || !Array.isArray(data.edges)) {
     return {errors:['Проверьте размеры и содержимое сетки, модулей и границ.']};
   }
@@ -103,7 +103,8 @@ export function inspectLayout(data) {
   const equipment = [];
   for (const [key,[kind,label]] of Object.entries(MODULES)) {
     const point = data.modules[key];
-    if (key === 'shield' && !Object.hasOwn(data.modules, key)) continue;
+    if (['shield','teleport'].includes(key) && !Object.hasOwn(data.modules,key)) continue;
+    if (key === 'weapons' && Object.hasOwn(data.modules,'teleport') && !Object.hasOwn(data.modules,key)) continue;
     if (!coords(point) || at(data,point) !== kind) errors.push('Установите модуль «'+label+'».');
     else equipment.push(point);
   }

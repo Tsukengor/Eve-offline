@@ -29,7 +29,7 @@ static func decode(data: Variant) -> Dictionary:
 			return {"error": "Строки палубы должны быть одной длины."}
 		for x in range(width):
 			var kind: String = rows[y][x]
-			if not ".CBESWLRGH".contains(kind):
+			if not ".CBESWLRGHT".contains(kind):
 				return {"error": "Неизвестный тип клетки."}
 			if kind != ".":
 				floors[Vector2i(x, y)] = kind
@@ -38,6 +38,8 @@ static func decode(data: Variant) -> Dictionary:
 		return {"error": "Отсутствует размещение модулей."}
 	var equipment := {}
 	for key: String in MODULES:
+		if key == "weapons" and modules.has("teleport") and not modules.has(key):
+			continue
 		var tile := _point(modules.get(key))
 		if floors.get(tile) != MODULES[key]:
 			return {"error": "Установите модуль в подходящий отсек: " + key}
@@ -48,6 +50,11 @@ static func decode(data: Variant) -> Dictionary:
 		if floors.get(tile) != "H":
 			return {"error": "Установите пост щита в отсек щита."}
 		equipment["shield"] = tile
+	if modules.has("teleport"):
+		var tile := _point(modules.teleport)
+		if floors.get(tile) != "T":
+			return {"error": "Установите телепорт в отсек телепорта."}
+		equipment["teleport"] = tile
 
 	var edges: Variant = data.get("edges")
 	if not edges is Array or edges.size() > 4 * floors.size():
@@ -80,8 +87,11 @@ static func decode(data: Variant) -> Dictionary:
 	for tile: Vector2i in equipment.values():
 		walkable.erase(tile)
 	var spawns: Array[Vector2i] = []
-	for key in ["bridge", "engine", "airlock", "weapons", "life_support", "reactor"]:
-		var tile: Vector2i = equipment[key]
+	for key in ["bridge", "engine", "airlock", "weapons", "life_support", "reactor", "teleport"]:
+		var module := "teleport" if key == "weapons" and not equipment.has("weapons") else str(key)
+		if not equipment.has(module):
+			continue
+		var tile: Vector2i = equipment[module]
 		var directions := [Vector2i.DOWN]
 		if key == "engine":
 			directions = Hull.STEPS

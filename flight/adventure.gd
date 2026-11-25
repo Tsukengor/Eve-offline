@@ -9,10 +9,11 @@ const RECRUIT_NAMES := ["Саша", "Вера", "Денис", "Яна", "Оле�
 const SCRAP := 3
 const ION := 4
 const NEST := 5
+const CORDON := 6
 const MAP_POINTS := [Vector2(119, 283), Vector2(219, 108), Vector2(392, 230), Vector2(245, 375),
-	Vector2(601, 113), Vector2(627, 345)]
+	Vector2(601, 113), Vector2(627, 345), Vector2(457, 407)]
 const ROUTES := [Vector3i(0, SCRAP, 2), Vector3i(SCRAP, 2, 2), Vector3i(1, ION, 2),
-	Vector3i(2, ION, 2), Vector3i(ION, NEST, 3), Vector3i(SCRAP, NEST, 3)]
+	Vector3i(2, ION, 2), Vector3i(ION, NEST, 3), Vector3i(SCRAP, NEST, 3), Vector3i(SCRAP, CORDON, 2), Vector3i(NEST, CORDON, 2)]
 const PICKUP_DISTANCE := 82.0
 const PICKUP_SPEED := 75.0
 const MODULE_NAMES := {"thrusters": "Маневровые сопла", "reactor": "Реактор", "shield": "Генератор щита"}
@@ -22,11 +23,12 @@ const WEAPON_PRICES := [0, 0, 110, 135, 165]
 
 # Opponent indices follow Voyage.Opponent. Slots are stable across jumps and saves.
 const ENCOUNTERS := {
-	SCRAP: [0, 1], ION: [2, 1], NEST: [3, 0, 2],
+	SCRAP: [0, 1], ION: [2, 1], NEST: [3, 0, 2], CORDON: [4, 1],
 }
 const SECTOR_NOTES := {
 	SCRAP: "Старые остовы мешают манёврам. Бур и истребитель атакуют с разных направлений.",
 	ION: "В ионных облаках реакторы теряют энергию. Ракетчик атакует из-за облаков.",
+	CORDON: "Перехватчик высаживает бойцов, пока истребитель прикрывает его снаружи.",
 	NEST: "Роевик и его прикрытие атакуют одновременно. Дроны выходят на орбиту вокруг корабля.",
 }
 const CONTRACTS := [
@@ -42,6 +44,8 @@ const CONTRACTS := [
 		"brief": "Уничтожьте дозор в Грозе. Вблизи ионных облаков ракеты особенно опасны."},
 	{"title": "Разорить Гнездо", "from": 1, "to": NEST, "battle": true, "credits": 220, "parts": 4,
 		"brief": "Разбейте роевика и прикрытие, дождитесь отключения дронов и пришвартуйтесь к «Якорю»."},
+	{"title": "Прорыв через Заслон", "from": SCRAP, "to": CORDON, "battle": true, "credits": 195, "parts": 3,
+		"brief": "Перехватчик высаживает десант в шлюз. Обезвредьте абордажников и освободите подлёт к «Дозору»."},
 ]
 
 class SalvageCrate:
@@ -95,7 +99,7 @@ func record_defeat(system: int, slot: int, at: Vector2, opponent: int, drift := 
 	defeated[system].append(slot)
 	if not containers.has(system):
 		containers[system] = []
-	var crate := SalvageCrate.new(at, [32, 27, 42, 68][opponent], 2 if opponent == 3 else 1)
+	var crate := SalvageCrate.new(at, [32, 27, 42, 68, 75][opponent], 2 if opponent == 3 else 1)
 	crate.body.velocity = drift
 	crate.body.spin = 0.28
 	containers[system].append(crate)

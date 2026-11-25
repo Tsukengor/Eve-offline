@@ -224,7 +224,7 @@ func _test_adventure() -> void:
 	_run = run
 	_voyage = run.voyage
 	var voyage := _voyage
-	_check(voyage.adventure != null and voyage.docked and voyage.system_count() == 6
+	_check(voyage.adventure != null and voyage.docked and voyage.system_count() == 7 and Vector3i(Voyage.Adventure.SCRAP, Voyage.Adventure.CORDON, 2) in voyage.routes()
 		and FileAccess.file_exists(save_path), "Adventure has its own sector and initial station checkpoint")
 	_run._open_journal()
 	_check(paused and _run._adventure_panel.visible, "The station workshop opens and preserves the tactical view")
@@ -509,7 +509,22 @@ func _test_global_shortcuts() -> void:
 	_run._refresh()
 	_check(_run._alerts.size() == 1 and _run._alerts.back().text.contains("29 HP"),
 		"Crossing the crew health threshold queues one notification")
+	_run._process(90.0)
+	_check(_run._alerts.size() == 1 and _run._alert_scroll.position.x == 32.0,
+		"An outstanding condition remains visible in the left notification stack")
+	var click := InputEventMouseButton.new()
+	click.button_index = MOUSE_BUTTON_LEFT
+	click.pressed = true
+	_run._dismiss_alert(click, _run._alerts[0].key)
+	_run._refresh()
+	_check(_run._alerts.is_empty(), "Dismissing an alert hides it until the condition clears")
 	member.health = 100.0
+	_run._process(0.0)
+	member.health = 22.0
+	_run._refresh()
+	member.health = 100.0
+	_run._process(0.0)
+	_check(_run._alerts.is_empty(), "Recovering resolves the queued health alert")
 
 
 func _test_asteroid_belt() -> void:
@@ -527,6 +542,17 @@ func _test_asteroid_belt() -> void:
 	_voyage._advance_battle(TICK)
 	_check(enemy.position.distance_to(_voyage.station_position()) <= Voyage.Belt.INNER_LIMIT + 0.01,
 		"Enemies stay inside the belt boundary")
+	_voyage.ship_position = _voyage.station_position() + Vector2(9500.0, 0.0)
+	_voyage._advance_asteroids()
+	_check(_voyage.deep_asteroids.size() > 450, "The exterior is densely populated beyond the first ring")
+	var far_rock := _voyage.deep_asteroids.front() as Voyage.Belt.Rock
+	var before := far_rock.position
+	_voyage._advance_asteroids(0.8)
+	_check(before != far_rock.position, "Deep field asteroids drift while the sector advances")
+	_voyage.ship_position = _voyage.station_position() + Vector2(29000.0, 7000.0)
+	_voyage._advance_asteroids()
+	_check(_voyage.deep_asteroids.size() > 450 and far_rock not in _voyage.deep_asteroids,
+		"The field streams further chunks instead of ending beyond the belt")
 
 
 func _test_inertia_and_pause() -> void:

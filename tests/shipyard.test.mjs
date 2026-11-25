@@ -6,7 +6,7 @@ import {edgeKey,fresh,inspectLayout,prune,validWeapon,weaponDefault,upgradeWeapo
 const layout = (name) => JSON.parse(readFileSync(new URL('../deck/layouts/'+name+'.json',import.meta.url),'utf8'));
 
 test('the editor accepts the layouts shipped with Godot',()=>{
-  for (const name of ['rescue','drill','fighter','swarm']) assert.deepEqual(inspectLayout(layout(name)).errors,[]);
+  for (const name of ['rescue','drill','fighter','swarm','interceptor']) assert.deepEqual(inspectLayout(layout(name)).errors,[]);
 });
 
 test('an exterior hatch is valid and disappears when its floor is erased',()=>{

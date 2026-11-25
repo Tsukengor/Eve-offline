@@ -73,6 +73,8 @@ func _allocate(level: int, module: String) -> void:
 func _refresh() -> void:
 	var drain := _model.overload_draw()
 	_usage.text = "Память %d / %d" % [_model.memory_used(), Computer.MEMORY]
+	if _model.offline():
+		_usage.text = "Компьютер отключён взломом"
 	if drain > 0.0:
 		_usage.text += "   ·   Перегрузка −%.2f ед/с" % drain
 	_usage.add_theme_color_override("font_color", Color("#ffae87") if drain > 0.0 else Color("#78ead0"))

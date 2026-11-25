@@ -18,6 +18,8 @@ const STATION_MODEL = preload("res://flight/models/station.tres")
 const DRILL_SCENE := preload("res://flight/drill_enemy.tscn")
 const FIGHTER_SCENE := preload("res://flight/fighter_enemy.tscn")
 const SWARM_SCENE := preload("res://flight/swarm_enemy.tscn")
+const INTERCEPTOR_SCENE := preload("res://flight/interceptor_enemy.tscn")
+const Interceptor = preload("res://flight/interceptor_enemy.gd")
 const SwarmShip = preload("res://flight/swarm_enemy.gd")
 const Drone = preload("res://flight/drone.gd")
 const DRONE_WEAPON := preload("res://flight/drone_weapon.tres")
@@ -29,7 +31,7 @@ const TEST_WEAPONS := [
 ]
 const MAX_TEST_ENEMIES := 16
 
-enum Opponent { DRILL, FIGHTER, MISSILE_FIGHTER, SWARM }
+enum Opponent { DRILL, FIGHTER, MISSILE_FIGHTER, SWARM, INTERCEPTOR }
 
 enum Stage { ANSWER_DISTRESS, DELIVER_SURVIVORS, COMPLETE }
 
@@ -49,6 +51,8 @@ const SYSTEMS := [
 		"position": Vector2(660, 208), "arrival": Vector2(142, 410)},
 	{"name": "Гнездо", "station": "Якорь", "map": Vector2(441, 237),
 		"position": Vector2(690, 276), "arrival": Vector2(80, 315)},
+	{"name": "Заслон", "station": "Дозор", "map": Vector2(552, 370),
+		"position": Vector2(627, 227), "arrival": Vector2(123, 435)},
 ]
 # Start system, end system and fuel cost. Routes work in both directions.
 const ROUTES := [Vector3i(HOME, DISTRESS, 2), Vector3i(DISTRESS, REFUGE, 3)]
@@ -140,6 +144,10 @@ var drones: Array[Drone] = []
 var wrecks: Array[Wreck] = []
 var asteroids: Array[Belt.Rock] = []
 var _belts := {}
+var deep_asteroids: Array[Belt.Rock] = []
+var _destroyed_asteroids := {}
+var _asteroid_time := 0.0
+var _asteroid_chunk := Vector2i.MAX
 var _wrecks_by_system: Dictionary[int, Array] = {}
 var enemy: EnemyShip:
 	get:
@@ -169,6 +177,7 @@ func configure(ship_deck: DeckSimulation) -> void:
 	station_body.model = STATION_MODEL
 	station_body.fixed = true
 	station_body.spin = STATION_SPIN
+	computer.outage = deck.computer_interrupted
 	deck.changed.connect(changed.emit)
 	reset()
 
@@ -192,6 +201,8 @@ func reset() -> void:
 	wrecks.clear()
 	_wrecks_by_system.clear()
 	_belts.clear()
+	_destroyed_asteroids.clear()
+	_asteroid_time = 0.0
 	body.shield.reset()
 	body.shield.online = false
 	_spawn_ship()
@@ -243,6 +254,7 @@ func clear_test_enemies() -> void:
 	wrecks.clear()
 	stop_laser()
 	_clear_enemies()
+	deck.clear_boarders()
 	for index in range(projectiles.size() - 1, -1, -1):
 		projectiles[index].queue_free()
 		projectiles.remove_at(index)
@@ -274,6 +286,8 @@ func set_test_damage(player: bool, hostiles: bool) -> void:
 		hostile.deck.damage_enabled = not in_arena or hostiles
 	for drone in drones:
 		drone.damage_enabled = not in_arena or hostiles
+	for member in deck.boarders:
+		member.immune = in_arena and not hostiles
 
 
 func _spawn_enemy(at: Vector2, kind: Opponent = Opponent.DRILL) -> EnemyShip:
@@ -282,6 +296,8 @@ func _spawn_enemy(at: Vector2, kind: Opponent = Opponent.DRILL) -> EnemyShip:
 		scene = DRILL_SCENE
 	elif kind == Opponent.SWARM:
 		scene = SWARM_SCENE
+	elif kind == Opponent.INTERCEPTOR:
+		scene = INTERCEPTOR_SCENE
 	var hostile := scene.instantiate() as EnemyShip
 	if kind == Opponent.MISSILE_FIGHTER:
 		hostile.weapon = MISSILE_WEAPON
@@ -308,6 +324,8 @@ func _spawn_ship() -> void:
 	body.active.clear()
 	station_body.position = station_position()
 	asteroids = []
+	deep_asteroids.clear()
+	_asteroid_chunk = Vector2i.MAX
 	if not in_arena:
 		if not _belts.has(current_system):
 			_belts[current_system] = Belt.generate(station_position(), current_system)
@@ -377,7 +395,9 @@ func jump_blocker(destination: int) -> String:
 	var cost := route_cost(destination)
 	if cost == 0:
 		return "Прямого маршрута нет."
-	if deck.engine_health < 1.0 or not deck.module_online(deck.engine_tile):
+	if _boarded():
+		return "На борту противники."
+	if deck.engine_health < 1.0 or not deck.module_online(deck.engine_tile) or deck.hacked(deck.engine_tile):
 		return "Сначала восстановите двигатель."
 	if fuel < cost:
 		return "Недостаточно топлива."
@@ -427,8 +447,10 @@ func dock_blocker() -> String:
 		return "Рейс завершён."
 	if docked:
 		return ""
-	if adventure != null and (not enemies.is_empty() or not drones.is_empty()):
+	if adventure != null and (not enemies.is_empty() or not drones.is_empty() or _boarded()):
 		return "Причал закрыт во время боя."
+	if deck.hacked(deck.airlock_tile):
+		return "Управление шлюзом перехвачено."
 	if distance_to_station() > DOCK_RANGE:
 		return "Войдите в зону стыковки."
 	if velocity.length() > DOCK_SPEED:
@@ -544,6 +566,8 @@ func _physics_process(delta: float) -> void:
 
 	var stabilized := manual_control and Input.is_action_pressed("flight_stabilize")
 	var shield_efficiency := _shield_efficiency()
+	if deck.hacked(deck.shield_tile):
+		body.shield.absorb(delta * 13.0)
 	var changed_shield := body.shield.advance(delta, shield_efficiency > 0.0, shield_efficiency)
 	var changed_flight := advance_flight(delta, steering, forward_thrust, braking, stabilized)
 	var changed_battle := _advance_battle(delta)
@@ -552,7 +576,7 @@ func _physics_process(delta: float) -> void:
 		return
 	if not in_arena:
 		_advance_station(delta)
-	var changed_rocks := _advance_asteroids()
+	var changed_rocks := _advance_asteroids(delta)
 	var changed_wrecks := _advance_wrecks(delta)
 	var changed_loot := _advance_salvage(delta)
 	var channeling := weapon != null and weapon.kind == WeaponProfile.Kind.LASER
@@ -578,13 +602,13 @@ func advance_flight(delta: float, steering: float, forward_thrust: bool, braking
 		pilot = _automated_efficiency("pilot") * deck.hull.condition(deck.bridge_tile)
 	var engine_online := deck.module_online(deck.engine_tile)
 	var engine := deck.hull.condition(deck.engine_tile) if engine_online else 0.0
-	var drive := lerpf(0.38, 1.0, deck.engine_health) * engine * pilot
+	var drive := lerpf(0.38, 1.0, deck.engine_health) * engine * pilot * deck.drive_modifier()
 	turn_input = steering * pilot if engine_online else 0.0
 	if turn_input * angular_velocity > 0.0 and absf(angular_velocity) >= MAX_SPIN * pilot:
 		turn_input = 0.0
 	var main := drive if forward_thrust and not braking else 0.0
 	var brake := engine * pilot if braking else 0.0
-	var assistance: bool = computer.levels.assist > 0
+	var assistance := computer.enabled("assist")
 	var supply := body.advance(delta, main, turn_input, brake,
 		engine_online and pilot > 0.0 and (stabilized or braking and assistance), assistance)
 	thrusting = main > 0.0 and supply > 0.0
@@ -672,7 +696,7 @@ func fire() -> bool:
 
 
 func assisted_target() -> Dictionary:
-	if computer.levels.aim <= 0 or weapon == null:
+	if not computer.enabled("aim") or weapon == null:
 		return {}
 	var speed := 510.0
 	match weapon.kind:
@@ -772,7 +796,11 @@ func _advance_battle(delta: float) -> bool:
 	for index in range(enemies.size() - 1, -1, -1):
 		var hostile := enemies[index]
 		if hostile.body.shield != null:
-			hostile.body.shield.advance(delta, hostile.deck.operator_at(DeckSimulation.WorkPose.SHIELD) != null)
+			if hostile.deck.hacked(hostile.deck.shield_tile):
+				hostile.body.shield.absorb(delta * 13.0)
+			var operator := hostile.deck.operator_at(DeckSimulation.WorkPose.SHIELD)
+			hostile.body.shield.advance(delta, operator != null,
+				1.28 if operator != null and operator.specialty == DeckSimulation.SHIELD_TECH else 1.0)
 		hostile.hit_remaining = move_toward(hostile.hit_remaining, 0.0, delta)
 		if hostile.disabled():
 			if not in_training:
@@ -790,14 +818,16 @@ func _advance_battle(delta: float) -> bool:
 			enemies.remove_at(index)
 		elif not in_training:
 			hostile.obstacles = obstacles
-			hostile.belt_center = station_position() if not asteroids.is_empty() else Vector2.INF
+			hostile.belt_center = station_position() if not in_arena else Vector2.INF
 			hostile.advance(delta, ship_position, velocity)
-			if not asteroids.is_empty():
+			if not in_arena:
 				Belt.constrain(hostile.body, station_position())
 			if hostile.shot_requested:
 				_fire_hostile(hostile)
 			if hostile is SwarmShip:
 				_maybe_launch_drone(hostile)
+			elif hostile is Interceptor and not docked and docking_time <= 0.0:
+				hostile.advance_boarding(delta, deck, ship_position)
 
 	_advance_drones(delta)
 	for index in range(enemies.size()):
@@ -857,7 +887,7 @@ func _advance_drones(delta: float) -> void:
 			drones.remove_at(index)
 			continue
 		drone.advance(delta, ship_position, velocity, ship_position)
-		if not asteroids.is_empty():
+		if not in_arena:
 			Belt.constrain(drone.body, station_position())
 		if drone.shot_requested and _launch_shot(DRONE_WEAPON, drone.body, drone.body.model.muzzle, drone.body.heading, true):
 			weapon_fired.emit(WeaponProfile.Kind.KINETIC)
@@ -971,28 +1001,48 @@ func _collision_damage(interior: DeckSimulation, ship: Physics.Body, contact: Ph
 		(contact.point - ship.position).rotated(-ship.heading - PI * 0.5))
 
 
-func _advance_asteroids() -> bool:
-	if asteroids.is_empty() or docked or docking_time > 0.0 or distance_to_station() < Belt.INNER_LIMIT - 60.0:
+func _advance_asteroids(delta := 0.0) -> bool:
+	if in_arena or docked or docking_time > 0.0:
 		return false
+	_asteroid_time += delta
+	var offset := ship_position - station_position()
+	if offset.length() < Belt.INNER_LIMIT - 850.0:
+		return false
+	var chunk := Vector2i((offset / Belt.CHUNK).floor())
+	if chunk != _asteroid_chunk:
+		_asteroid_chunk = chunk
+		if not _destroyed_asteroids.has(current_system):
+			_destroyed_asteroids[current_system] = {}
+		deep_asteroids = Belt.deep_field(station_position(), current_system, chunk, _destroyed_asteroids[current_system])
 	var hit := false
-	for index in range(asteroids.size() - 1, -1, -1):
-		var rock := asteroids[index]
-		if ship_position.distance_squared_to(rock.position) > (rock.radius + 29.0) ** 2:
-			continue
-		asteroids.remove_at(index)
-		var direction := rock.position.direction_to(ship_position)
-		var impact_speed := maxf(0.0, -velocity.dot(direction))
-		deck.apply_hit(clampf(10.0 + impact_speed * 0.17, 12.0, 43.0), 0.48, 8.0,
-			(-direction).rotated(-heading - PI * 0.5))
-		velocity += direction * impact_speed * 0.50
-		var burst := Wreck.new()
-		burst.position = rock.position
-		burst.size = rock.radius * 1.25
-		burst.broken_hull = true
-		burst.vanishes = true
-		wrecks.append(burst)
-		hit = true
+	for field: Array in [asteroids, deep_asteroids]:
+		for index in range(field.size() - 1, -1, -1):
+			var rock: Belt.Rock = field[index]
+			rock.advance(_asteroid_time)
+			if ship_position.distance_squared_to(rock.position) > (rock.radius + 29.0) ** 2:
+				continue
+			field.remove_at(index)
+			if rock.id.z >= Belt.COUNT:
+				_destroyed_asteroids[current_system][rock.id] = true
+			_hit_asteroid(rock)
+			hit = true
 	return hit
+
+
+func _hit_asteroid(rock: Belt.Rock) -> void:
+	var direction := rock.position.direction_to(ship_position)
+	if direction.is_zero_approx():
+		direction = -Vector2.from_angle(heading)
+	var impact_speed := maxf(0.0, -velocity.dot(direction))
+	deck.apply_hit(clampf(14.0 + impact_speed * 0.19, 15.0, 48.0), 0.48, 8.0,
+		(-direction).rotated(-heading - PI * 0.5))
+	velocity += direction * impact_speed * 0.65
+	var burst := Wreck.new()
+	burst.position = rock.position
+	burst.size = rock.radius * 1.25
+	burst.broken_hull = true
+	burst.vanishes = true
+	wrecks.append(burst)
 
 
 func start_adventure(continue_saved: bool) -> void:
@@ -1010,6 +1060,7 @@ func start_adventure(continue_saved: bool) -> void:
 	weapon = TEST_WEAPONS[adventure.slots[adventure.equipped]]
 	_sync_freight()
 	computer = Computer.new()
+	computer.outage = deck.computer_interrupted
 	if restored:
 		computer.restore(adventure.computer_settings)
 		if adventure.roster.is_empty():
@@ -1107,7 +1158,7 @@ func set_computer(module: String, level: int) -> void:
 
 
 func scanner_available() -> bool:
-	return computer.levels.scanner > 0
+	return computer.enabled("scanner")
 
 
 func _automated_efficiency(module: String) -> float:
@@ -1123,7 +1174,10 @@ func weapon_efficiency() -> float:
 func _shield_efficiency() -> float:
 	if deck.shield_tile == deck.INVALID_CELL or not deck.module_online(deck.shield_tile):
 		return 0.0
-	return 1.0 if deck.operator_at(DeckSimulation.WorkPose.SHIELD) != null else _automated_efficiency("shield")
+	var operator := deck.operator_at(DeckSimulation.WorkPose.SHIELD)
+	if operator != null:
+		return 1.28 if operator.specialty == deck.SHIELD_TECH else 1.0
+	return _automated_efficiency("shield")
 
 
 func hire_recruit(id: int) -> bool:
@@ -1192,6 +1246,8 @@ func interact() -> void:
 		return
 	if velocity.length() > Adventure.PICKUP_SPEED:
 		notice = "Сбавьте скорость до 75 ед/с для подбора."
+	elif not deck.cargo_controls_online():
+		notice = "Взломано управление грузовым отсеком."
 	else:
 		adventure.collect(current_system, item)
 		notice = "Подобрано %d кр. и %d дет." % [item.credits, item.parts]
@@ -1287,3 +1343,15 @@ func _resolve_contact() -> void:
 	var hit := Physics.contact(body, station_body)
 	if hit != null:
 		Physics.resolve(body, station_body, hit, 0.0)
+
+
+func _boarded() -> bool:
+	return deck.boarders.any(func(member: DeckSimulation.CrewMember) -> bool: return member.health > 0.0)
+
+
+func hack_target_available() -> bool:
+	return is_instance_valid(enemy) and not enemy.disabled() and ship_position.distance_to(enemy.position) <= DeckSimulation.HACK_RANGE
+
+
+func hack_enemy(kind: String, subject: Variant = null) -> bool:
+	return hack_target_available() and deck.send_hack(enemy.deck, kind, subject)

@@ -49,6 +49,7 @@ var _settings_overlay: Control
 var _computer_button: Button
 var _spawn_missile_fighter: Button
 var _spawn_swarm: Button
+var _spawn_interceptor: Button
 var _scan_button: Button
 var _scan_next: Button
 var _test_panel: Control
@@ -58,9 +59,16 @@ var _test_thrust_value: Label
 var _spawn_drill: Button
 var _spawn_fighter: Button
 var _clear_targets: Button
+var _alert_scroll: ScrollContainer
 var _alert_stack: VBoxContainer
 var _alerts: Array[Dictionary] = []
-var _low_crew := {}
+var _dismissed_alerts := {}
+var _recruit_role: OptionButton
+var _hire_test_crew: Button
+var _hack_actions: OptionButton
+var _hack_execute: Button
+var _hack_target: Button
+var _hack_ship := -1
 var _slow_motion := false
 var _threat_announced := false
 var _threat_system := -1
@@ -86,13 +94,22 @@ func _ready() -> void:
 	add_child(_weapon_select)
 	_build_test_panel()
 	_build_run_overlays()
+	_alert_scroll = ScrollContainer.new()
+	_alert_scroll.position = Vector2(32, 94)
+	_alert_scroll.size.x = 181.0
+	_alert_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_alert_scroll.mouse_filter = Control.MOUSE_FILTER_PASS
+	_alert_scroll.z_index = 11
+	_alert_scroll.hide()
+	add_child(_alert_scroll)
 	_alert_stack = VBoxContainer.new()
-	_alert_stack.position = Vector2(794, 94)
-	_alert_stack.custom_minimum_size.x = 294.0
+	_alert_stack.custom_minimum_size.x = 163.0
 	_alert_stack.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_alert_stack.z_index = 11
-	add_child(_alert_stack)
+	_alert_scroll.add_child(_alert_stack)
+	_alert_stack.minimum_size_changed.connect(_size_alerts)
 	deck.simulation.damage_alert.connect(_show_alert)
+	deck.simulation.security_alert.connect(_show_security_alert)
+	_build_security_controls()
 	voyage.in_arena = session == Session.ARENA
 	voyage.in_training = session == Session.TRAINING
 	deck.simulation.auto_crew = not voyage.in_training
@@ -189,6 +206,7 @@ func _refresh() -> void:
 	if voyage.deck != null:
 		_check_low_health()
 		_check_threats()
+		_refresh_security_controls()
 	_nav[Mode.DECK].text = _shortcut("Палуба", "toggle_deck")
 	_nav[Mode.MAP].text = _shortcut("Карта", "toggle_map")
 	_space_pause.text = _shortcut("Продолжить" if get_tree().paused and mode != Mode.MAP else "Пауза", "tactical_pause")
@@ -221,6 +239,7 @@ func _refresh() -> void:
 	_spawn_fighter.disabled = _spawn_drill.disabled
 	_spawn_missile_fighter.disabled = _spawn_drill.disabled
 	_spawn_swarm.disabled = _spawn_drill.disabled
+	_spawn_interceptor.disabled = _spawn_drill.disabled
 	_clear_targets.disabled = voyage.enemies.is_empty() and voyage.drones.is_empty() and voyage.projectiles.is_empty() and voyage.wrecks.is_empty()
 	_action.visible = mode != Mode.DECK and not voyage.in_arena and not lost
 	if mode == Mode.DECK or lost:
@@ -459,7 +478,9 @@ func _build_test_panel() -> void:
 		voyage.add_test_enemy.bind(Voyage.Opponent.MISSILE_FIGHTER))
 	_spawn_swarm = _test_button("+ Роевик", Vector2(986, 216), Vector2(82, 30),
 		voyage.add_test_enemy.bind(Voyage.Opponent.SWARM))
-	_clear_targets = _test_button("Убрать противников", Vector2(816, 251), Vector2(252, 30), voyage.clear_test_enemies)
+	_spawn_interceptor = _test_button("+ Перехватчик", Vector2(816, 251), Vector2(136, 30),
+		voyage.add_test_enemy.bind(Voyage.Opponent.INTERCEPTOR))
+	_clear_targets = _test_button("Убрать всех", Vector2(958, 251), Vector2(110, 30), voyage.clear_test_enemies)
 	_damage_check("Урон игроку", 282, true)
 	_damage_check("Урон противникам", 310, false)
 	_test_mass_value = _label("", Vector2(816, 348), 15, _test_panel)
@@ -467,6 +488,83 @@ func _build_test_panel() -> void:
 	_test_thrust_value = _label("Тяга  1.00×", Vector2(816, 410), 15, _test_panel)
 	_test_slider(440, 0.25, 2.0, false)
 	_update_test_physics_labels()
+
+
+func _build_security_controls() -> void:
+	_recruit_role = _choices(Vector2(32, 683), 202.0)
+	for profile in Voyage.DeckSimulation.SPECIALTIES:
+		_recruit_role.add_item(profile.role)
+	_recruit_role.select(Voyage.DeckSimulation.FIGHTER)
+	_hire_test_crew = _button("Нанять", Vector2(242, 683), Vector2(100, 28), _hire_on_range)
+	_hack_actions = _choices(Vector2(540, 683), 344.0)
+	_hack_execute = _button("Применить", Vector2(890, 683), Vector2(104, 28), _execute_hack)
+	_hack_target = _button("Цель", Vector2(1000, 683), Vector2(88, 28), _cycle_scan)
+
+
+func _choices(at: Vector2, width: float) -> OptionButton:
+	var choices := OptionButton.new()
+	choices.position = at
+	choices.custom_minimum_size.x = width
+	choices.size = Vector2(width, 28)
+	choices.fit_to_longest_item = false
+	choices.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	choices.focus_mode = Control.FOCUS_NONE
+	add_child(choices)
+	return choices
+
+
+func _hire_on_range() -> void:
+	if voyage.in_arena:
+		var specialty := _recruit_role.selected
+		voyage.deck.hire_member(Voyage.DeckSimulation.SPECIALTIES[specialty].role, specialty)
+
+
+func _refresh_security_controls() -> void:
+	var on_deck := mode == Mode.DECK and voyage.battle_result.is_empty()
+	_recruit_role.visible = on_deck and voyage.in_arena
+	_hire_test_crew.visible = _recruit_role.visible
+	_hire_test_crew.disabled = not voyage.deck.available_berth()
+	_hack_actions.visible = on_deck and voyage.deck.has_hacker()
+	_hack_execute.visible = _hack_actions.visible
+	_hack_target.visible = _hack_actions.visible and voyage.enemies.size() > 1
+	if not _hack_actions.visible:
+		return
+	var hostile := voyage.enemy
+	var id := hostile.get_instance_id() if is_instance_valid(hostile) else 0
+	if id != _hack_ship:
+		_hack_ship = id
+		_hack_actions.clear()
+		_add_hack_choice("Фаерволл · свой корабль", "firewall")
+		if id != 0:
+			_add_hack_choice("%s · компьютер" % hostile.call_sign, "computer")
+			for room in hostile.deck.hull.rooms:
+				var cell: Vector2i = room.tiles.front()
+				_add_hack_choice("%s · %s" % [hostile.call_sign, hostile.deck.ROOM_NAMES[hostile.deck.tile_kind(cell)]], "room", cell)
+			for edge: Vector4i in hostile.deck.doors:
+				if edge not in hostile.deck.hatches:
+					var a := Vector2i(edge.x, edge.y)
+					var b := Vector2i(edge.z, edge.w)
+					_add_hack_choice("Дверь %s / %s (%d, %d)" % [hostile.deck.ROOM_NAMES[hostile.deck.tile_kind(a)], hostile.deck.ROOM_NAMES[hostile.deck.tile_kind(b)], a.x, a.y], "door", edge)
+		_hack_actions.select(0)
+	var cooldown := voyage.deck.hack_cooldown
+	_hack_actions.tooltip_text = "Фаерволл активен ещё %d с" % ceili(voyage.deck.firewall) if voyage.deck.firewall > 0.0 else "Команды хакера"
+	_hack_execute.disabled = cooldown > 0.0 or not voyage.deck.hacker_available()
+	_hack_execute.text = "%d с" % ceili(cooldown) if cooldown > 0.0 else "Применить"
+
+
+func _add_hack_choice(title: String, kind: String, subject: Variant = null) -> void:
+	_hack_actions.add_item(title)
+	_hack_actions.set_item_metadata(_hack_actions.item_count - 1, [kind, subject])
+
+
+func _execute_hack() -> void:
+	var action: Array = _hack_actions.get_item_metadata(_hack_actions.selected)
+	var success := voyage.deck.establish_firewall() if action[0] == "firewall" else voyage.hack_enemy(action[0], action[1])
+	if action[0] == "firewall":
+		voyage.deck.notice = "Фаерволл активен на 20 с." if success else "Хакер недоступен."
+	else:
+		voyage.deck.notice = "Взлом выполнен." if success else "Взлом отклонён. Проверьте дальность, энергию и защиту цели."
+	deck.queue_redraw()
 
 
 func _test_button(title: String, at: Vector2, size: Vector2, action: Callable) -> Button:
@@ -528,24 +626,60 @@ func _shortcut(title: String, action: String) -> String:
 	return "%s [%s]" % [title, _bindings.key_label(action)]
 
 
-func _show_alert(_tile: Vector2i, _breach: bool, message: String) -> void:
-	_notify(message)
+func _show_alert(tile: Vector2i, breach: bool, message: String) -> void:
+	var interior := voyage.deck
+	var room: int = interior.hull.room_at.get(tile, -1)
+	if message.begins_with("ЭМИ"):
+		_notify(message, "emp", func() -> bool: return not interior.emp_timers.is_empty() or interior.emp_recovery_time > 0.0)
+	elif breach:
+		_notify(message, "breach:%d" % room, func() -> bool:
+			for cell in interior.hull.breaches:
+				if interior.hull.room_at.get(cell, -1) == room:
+					return true
+			return false)
+		_notify("Повреждение — " + interior.ROOM_NAMES[interior.tile_kind(tile)].capitalize(), "damage:%d" % room,
+			func() -> bool: return interior.hull.condition(tile) < 1.0)
+	else:
+		_notify(message, "damage:%d" % room, func() -> bool: return interior.hull.condition(tile) < 1.0)
 
 
-func _notify(message: String) -> void:
+func _show_security_alert(kind: String, subject: Variant, message: String) -> void:
+	_notify(message, "%s:%s" % [kind, str(subject)], _security_alert_active.bind(kind, subject))
+
+
+func _security_alert_active(kind: String, subject: Variant) -> bool:
+	match kind:
+		"boarding": return voyage._boarded()
+		"computer": return voyage.deck.computer_interrupted()
+		"room": return voyage.deck.hacked(subject)
+		"door": return voyage.deck.doors.has(subject) and voyage.deck.doors[subject].lock_time > 0.0
+	return false
+
+
+func _notify(message: String, key := "", active := Callable()) -> void:
+	if key.is_empty():
+		key = message
+	if _dismissed_alerts.has(key):
+		return
 	for entry in _alerts:
-		if entry.text == message:
-			entry.time = 4.5
+		if entry.key == key:
+			if entry.text != message:
+				entry.text = message
+				entry.label.text = message
 			return
 	var line := Label.new()
 	line.text = message
-	line.custom_minimum_size.x = 278.0
+	line.custom_minimum_size.x = 147.0
 	line.add_theme_font_size_override("font_size", 14)
 	line.add_theme_color_override("font_color", Color("#ffbb91"))
 	line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	line.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var panel := PanelContainer.new()
-	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	panel.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	panel.tooltip_text = "Щёлкните, чтобы скрыть оповещение"
+	panel.add_to_group("alert_panels")
+	panel.gui_input.connect(_dismiss_alert.bind(key))
 	var outline := _style(Color("#142334"), Color("#6a5053"))
 	for side in [SIDE_LEFT, SIDE_RIGHT]:
 		outline.set_content_margin(side, 8.0)
@@ -554,9 +688,26 @@ func _notify(message: String) -> void:
 	panel.add_theme_stylebox_override("panel", outline)
 	panel.add_child(line)
 	_alert_stack.add_child(panel)
-	_alerts.append({"text": message, "time": 4.5, "node": panel})
-	if _alerts.size() > 5:
-		_remove_alert(0)
+	_alerts.append({"key": key, "text": message, "node": panel, "label": line, "active": active})
+	_size_alerts()
+
+
+func _size_alerts() -> void:
+	_alert_scroll.visible = not _alerts.is_empty()
+	_alert_scroll.size.y = minf(384.0, _alert_stack.get_combined_minimum_size().y)
+
+
+func _dismiss_alert(event: InputEvent, key: String) -> void:
+	if not (event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed):
+		return
+	for index in _alerts.size():
+		if _alerts[index].key == key:
+			var active: Callable = _alerts[index].active
+			if active.is_valid():
+				_dismissed_alerts[key] = active
+			_remove_alert(index)
+			get_viewport().set_input_as_handled()
+			return
 
 
 func _remove_alert(index: int) -> void:
@@ -564,28 +715,31 @@ func _remove_alert(index: int) -> void:
 	_alert_stack.remove_child(node)
 	node.queue_free()
 	_alerts.remove_at(index)
+	_size_alerts()
 
 
 func _check_low_health() -> void:
 	for member in voyage.deck.crew:
-		if member.health > 0.0 and member.health <= 30.0 and not _low_crew.has(member):
-			_low_crew[member] = true
-			_notify("%s · мало здоровья (%d HP)" % [member.title, ceili(member.health)])
-		elif member.health > 40.0:
-			_low_crew.erase(member)
+		if member.health > 0.0 and member.health <= 30.0:
+			_notify("%s · мало здоровья (%d HP)" % [member.title, ceili(member.health)], "crew:%d" % member.get_instance_id(),
+				func() -> bool: return member in voyage.deck.crew and member.health > 0.0 and member.health <= 30.0)
 
 
 func _check_threats() -> void:
 	if _threat_system != voyage.current_system:
 		_threat_system = voyage.current_system
 		_threat_announced = false
-	var threat := not voyage.enemies.is_empty() or not voyage.drones.is_empty()
+	var threat := _threat_active(_threat_system)
 	if threat and not _threat_announced and voyage.battle_result.is_empty():
 		_threat_announced = true
 		get_tree().paused = true
 		if mode == Mode.MAP:
 			_paused_before_map = true
-		_notify("Противники обнаружены · пауза")
+		_notify("Противники обнаружены", "threat:%d" % _threat_system, _threat_active.bind(_threat_system))
+
+
+func _threat_active(system: int) -> bool:
+	return system == voyage.current_system and (not voyage.enemies.is_empty() or not voyage.drones.is_empty())
 
 
 func _toggle_slow() -> void:
@@ -602,7 +756,7 @@ func _physics_process(_delta: float) -> void:
 		_refresh()
 
 
-func _process(delta: float) -> void:
+func _process(_delta: float) -> void:
 	if _training != null and not get_tree().paused:
 		_training.advance(mode == Mode.DECK)
 	if DisplayServer.get_name() != "headless":
@@ -612,9 +766,12 @@ func _process(delta: float) -> void:
 		elif not playing_laser and _laser_audio.playing:
 			_laser_audio.stop()
 	for index in range(_alerts.size() - 1, -1, -1):
-		_alerts[index].time -= delta
-		if _alerts[index].time <= 0.0:
+		var active: Callable = _alerts[index].active
+		if active.is_valid() and not active.call():
 			_remove_alert(index)
+	for key in _dismissed_alerts.keys():
+		if not _dismissed_alerts[key].call():
+			_dismissed_alerts.erase(key)
 
 
 func _play_shot(kind: int) -> void:
@@ -639,7 +796,7 @@ func _reset() -> void:
 	space.selected = -1
 	while not _alerts.is_empty():
 		_remove_alert(0)
-	_low_crew.clear()
+	_dismissed_alerts.clear()
 	_threat_announced = false
 	_threat_system = -1
 	_slow_motion = false
@@ -684,7 +841,7 @@ func _input(event: InputEvent) -> void:
 func _over_interface() -> bool:
 	var hovered := get_viewport().gui_get_hovered_control()
 	while is_instance_valid(hovered):
-		if hovered is BaseButton or hovered is Range or hovered is ScrollContainer or hovered is LineEdit:
+		if hovered is BaseButton or hovered is Range or hovered is ScrollContainer or hovered is LineEdit or hovered.is_in_group("alert_panels"):
 			return true
 		hovered = hovered.get_parent_control()
 	return false

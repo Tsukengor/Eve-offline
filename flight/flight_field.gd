@@ -29,12 +29,13 @@ const SHIELD_HIT := preload("res://assets/flight/shield_hit.png")
 const Profile = preload("res://flight/weapon_profile.gd")
 const REACTOR := preload("res://assets/deck/reactor.png")
 const ROOM_DAMAGE := preload("res://assets/deck/room_damage.png")
+const TELEPORT_FLASH := preload("res://assets/deck/teleport_flash.png")
 const STARFIELD := preload("res://assets/flight/starfield.png")
 
 const SCAN_FLOORS := {
 	"B": Color("#36526b"), "E": Color("#3c4a5d"), "S": Color("#365450"),
 	"C": Color("#243447"), "W": Color("#583c51"), "L": Color("#34566a"), "R": Color("#554b3c"),
-	"G": Color("#505244"), "H": Color("#325363"),
+	"G": Color("#505244"), "H": Color("#325363"), "T": Color("#544477"),
 }
 
 const GRID_PITCH := 84.0
@@ -74,6 +75,8 @@ func _draw() -> void:
 		_draw_drone(drone, size)
 	_draw_projectiles(size)
 	_draw_ship()
+	if voyage.deck.teleport_flash > 0.0:
+		_sprite(TELEPORT_FLASH, center, 94.0, Color(1.0, 1.0, 1.0, voyage.deck.teleport_flash))
 	if not voyage.battle_result.is_empty():
 		var dim := smoothstep(0.45, Voyage.DEFEAT_SECONDS, voyage.defeat_elapsed)
 		draw_rect(Rect2(Vector2.ZERO, size), Color(0.09, 0.028, 0.045, dim * 0.62))
@@ -83,14 +86,14 @@ func _draw() -> void:
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE / zoom)
 	size = frame.size
 	_draw_computer(size)
-	if voyage.scan_enemy and is_instance_valid(voyage.enemy):
+	if voyage.scan_enemy and voyage.scanner_available() and is_instance_valid(voyage.enemy):
 		_draw_scan(size)
 	_text("v  Скорость", Vector2(18, size.y - 18), 13, VELOCITY_COLOR)
 	_text("a  Ускорение", Vector2(122, size.y - 18), 13, ACCELERATION_COLOR)
 	if get_tree().paused:
-		_text("На паузе", Vector2(18, 28), 15, ACCELERATION_COLOR)
+		_text("На паузе", Vector2(size.x - 116.0, 28), 15, ACCELERATION_COLOR)
 	elif voyage.simulation_speed < 1.0:
-		_text("Время 0,25×", Vector2(18, 28), 15, ACCELERATION_COLOR)
+		_text("Время 0,25×", Vector2(size.x - 116.0, 28), 15, ACCELERATION_COLOR)
 
 
 func _draw_grid(size: Vector2) -> void:
@@ -157,7 +160,7 @@ func _draw_station(size: Vector2) -> void:
 		var label_position := station + Vector2(0, Voyage.STATION_SIZE * 0.5 + 23.0)
 		if visible_area.has_point(station) and visible_area.grow(-34.0).has_point(label_position):
 			_centered(label, label_position, color)
-	if not visible_area.has_point(station) and (active_distress or voyage.computer.levels.objects > 0):
+	if not visible_area.has_point(station) and (active_distress or voyage.computer.enabled("objects")):
 		_draw_station_bearing(size, station, label, color if active_distress else _scanner_color(color))
 
 
@@ -182,6 +185,8 @@ func _draw_enemy(enemy: Voyage.EnemyShip, size: Vector2) -> void:
 				_sprite(MUZZLE_FLASH, mount, 19.0, Color(1, 0.7, 0.5, enemy.flash_remaining / Voyage.FLASH_SECONDS))
 		draw_set_transform(Vector2.ZERO)
 		_draw_shield(enemy.body)
+		if enemy.deck.teleport_flash > 0.0:
+			_sprite(TELEPORT_FLASH, point, 105.0, Color(1.0, 1.0, 1.0, enemy.deck.teleport_flash))
 		if not visible.has_point(point):
 			_draw_threat(size, enemy)
 			return
@@ -199,7 +204,7 @@ func _draw_enemy(enemy: Voyage.EnemyShip, size: Vector2) -> void:
 
 func _draw_asteroids(size: Vector2) -> void:
 	var view := Rect2(Vector2.ZERO, size)
-	for rock in voyage.asteroids:
+	for rock in voyage.asteroids + voyage.deep_asteroids:
 		var point := _world_point(rock.position)
 		if not view.grow(rock.radius).has_point(point):
 			continue
@@ -213,7 +218,7 @@ func _scanner_color(color: Color) -> Color:
 
 
 func _draw_threat(size: Vector2, enemy: Voyage.EnemyShip) -> void:
-	if voyage.computer.levels.threat <= 0:
+	if not voyage.computer.enabled("threat"):
 		return
 	var approach := (enemy.velocity - voyage.velocity).dot(enemy.position.direction_to(voyage.ship_position))
 	var color := _scanner_color(Color("#ff8c85")) if approach > 20.0 else Color("#ca9c95")
@@ -222,7 +227,7 @@ func _draw_threat(size: Vector2, enemy: Voyage.EnemyShip) -> void:
 
 func _draw_computer(size: Vector2) -> void:
 	var view := Rect2(Vector2.ZERO, size)
-	if voyage.computer.levels.objects > 0:
+	if voyage.computer.enabled("objects"):
 		var objects: Array[Vector2] = []
 		var captions: Array[String] = []
 		if voyage.adventure != null:
@@ -450,7 +455,7 @@ func _draw_scan(size: Vector2) -> void:
 		draw_line(center - tangent, center + tangent, Color("#547883") if door.openness > 0.95 else Color("#cd9c6b"), 2.0)
 	for tile: Vector2i in deck.module_cells:
 		var at := origin + (Vector2(tile) + Vector2.ONE * 0.45) * cell_size
-		if deck.emp_time(tile) > 0.0:
+		if deck.emp_time(tile) > 0.0 or deck.hacked(tile):
 			_sprite(EMP_SPARK, at, 9.0)
 		elif deck.hull.condition(tile) < 1.0:
 			_sprite(ROOM_DAMAGE, at, 9.0)
