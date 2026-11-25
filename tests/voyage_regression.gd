@@ -228,6 +228,16 @@ func _test_adventure() -> void:
 	var voyage := _voyage
 	_check(voyage.adventure != null and voyage.docked and voyage.system_count() == 7 and Vector3i(Voyage.Adventure.SCRAP, Voyage.Adventure.CORDON, 2) in voyage.routes()
 		and FileAccess.file_exists(save_path), "Adventure has its own sector and initial station checkpoint")
+	_key(KEY_M)
+	await process_frame
+	await process_frame
+	_check(_run.mode == Run.Mode.MAP and _run.space.map_open and paused, "Adventure opens the sector map on tactical pause")
+	for index in voyage.system_count():
+		_check(is_instance_valid(_run.space._map_star(index)), "Every adventure system has a star texture")
+		_system_click(index)
+		_check(_run.space.selected == index, "Every adventure system can be selected on the map")
+	_key(KEY_M)
+	_check(_run.mode == Run.Mode.FLIGHT and not paused, "Closing the adventure map restores flight")
 	_run._open_journal()
 	_check(paused and _run._adventure_panel.visible, "The station workshop opens and preserves the tactical view")
 	_run._close_journal()

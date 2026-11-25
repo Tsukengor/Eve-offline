@@ -9,6 +9,11 @@ const STARS := [
 	preload("res://assets/flight/star_distress.png"),
 	preload("res://assets/flight/star_refuge.png"),
 ]
+const ADVENTURE_STAR_VARIANTS := {
+	Voyage.Adventure.SCRAP: 1,
+	Voyage.Adventure.ION: 0,
+	Voyage.Adventure.NEST: 2,
+}
 const FIELD := Rect2(32.0, 124.0, 738.0, 472.0)
 const SIDEBAR := Rect2(796.0, 124.0, 292.0, 472.0)
 const TEXT := Color("#e3edf6")
@@ -128,14 +133,11 @@ func _draw_map() -> void:
 		if index == selected or active:
 			draw_circle(at, 24.0, Color(PANEL, 0.94), true, -1.0, true)
 			draw_arc(at, 24.0, 0.0, TAU, 40, ACCENT if active else TEXT, 1.5, true)
-		var sprite_index := index % STARS.size()
-		if voyage.adventure != null and index in Voyage.Adventure.SECTOR_NOTES:
-			sprite_index = [1, 0, 2][index - Voyage.Adventure.SCRAP]
-			if not voyage.adventure.remaining(index).is_empty():
-				draw_arc(at, 22.0, 0.0, TAU, 32, Color(AMBER, 0.70), 1.0, true)
+		if voyage.adventure != null and not voyage.adventure.remaining(index).is_empty():
+			draw_arc(at, 22.0, 0.0, TAU, 32, Color(AMBER, 0.70), 1.0, true)
 		if voyage.adventure != null and voyage.adventure.has_destination(index):
 			draw_arc(at, 29.0, 0.0, TAU, 32, ACCENT, 1.0, true)
-		_draw_sprite(STARS[sprite_index], at, 37)
+		_draw_sprite(_map_star(index), at, 37)
 		_centered(Voyage.SYSTEMS[index].name, at + Vector2(0, 42), 20, ACCENT if active else TEXT)
 		if active and voyage.adventure == null:
 			_centered("Текущая система", at + Vector2(0, 61), 13, MUTED)
@@ -237,6 +239,13 @@ func _metric(label: String, value: String, y: float, tint: Color) -> void:
 
 func _section(label: String, y: float, tint: Color = MUTED) -> void:
 	_text(label, Vector2(816, y), 13, tint)
+
+
+func _map_star(index: int) -> Texture2D:
+	var variant := index % STARS.size()
+	if voyage.adventure != null:
+		variant = ADVENTURE_STAR_VARIANTS.get(index, variant)
+	return STARS[variant]
 
 
 func _map_point(index: int) -> Vector2:
