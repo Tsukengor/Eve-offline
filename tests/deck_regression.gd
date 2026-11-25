@@ -2,6 +2,7 @@ extends SceneTree
 ## Run with: godot --headless --path . --script res://tests/deck_regression.gd
 
 const DeckSimulation = preload("res://deck/deck_simulation.gd")
+const DeckView = preload("res://deck/deck_view.gd")
 const DECK := preload("res://deck/deck.tscn")
 const CORRIDOR_LAYOUT := "res://tests/rescue_corridor_fixture.json"
 const BRIDGE_DOOR := Vector4i(3, 3, 3, 4)
@@ -35,6 +36,7 @@ func _run() -> void:
 	_test_route_prefers_clear_path()
 	_test_parallel_orders()
 	_test_workstation_poses()
+	_test_seated_animation()
 	_test_helm_exclusivity()
 	_test_pass_workstations()
 	_test_local_duties_and_casualties()
@@ -345,6 +347,23 @@ func _test_pass_workstations() -> void:
 	_check(_sim.crew[1].squeeze == 0.0 and _sim.crew[1].position == Vector2(12, 2)
 		and _sim.workstation_pose(_sim.crew[1]) == poses.REPAIR and _sim.engine_health > 0.0,
 		"The engineer stays in the repair pose and keeps repairing")
+
+func _test_seated_animation() -> void:
+	var size := int(DeckView.FRAME_SIZE)
+	var lower_half := Vector2i(size, floori(size * 0.5))
+	for texture: Texture2D in DeckView.CREW_ATLAS:
+		var atlas := texture.get_image()
+		# Ignore hidden RGB values introduced by texture import around transparent edges.
+		atlas.premultiply_alpha()
+		for direction in DeckView.DIRECTION_COUNT:
+			var row := DeckView.CrewFrame.SEAT * DeckView.DIRECTION_COUNT + direction
+			var base := Rect2i(Vector2i(0, row * size + lower_half.y), lower_half)
+			var seat := atlas.get_region(base).get_data()
+			for frame in range(1, DeckView.FRAMES_PER_ACTION):
+				base.position.x = frame * size
+				_check(atlas.get_region(base).get_data() == seat,
+					"Seated animation keeps its chair and lower body fixed")
+
 
 func _test_local_duties_and_casualties() -> void:
 	_sim.reset(true)
