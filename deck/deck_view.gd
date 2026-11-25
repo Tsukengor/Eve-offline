@@ -78,6 +78,7 @@ const WEAPONS_COLOR := Color("#d6a4fa")
 
 var _font := ThemeDB.fallback_font
 var _selected := 1
+var _slow_motion := false
 var _hovered_cell := DeckSimulation.INVALID_CELL
 var _deck_origin := ORIGIN
 var _deck_cell := CELL
@@ -93,7 +94,10 @@ var _repair_audio: AudioStreamPlayer
 func _ready() -> void:
 	_normal_style = _button_style(PANEL, LINE)
 	_pause_button = _make_button(Vector2(796, 46), Vector2(164, 42), _toggle_pause)
-	_make_button(Vector2(972, 46), Vector2(116, 42), _reset).text = "Сброс"
+	_pause_button.visible = standalone
+	var reset := _make_button(Vector2(972, 46), Vector2(116, 42), _reset)
+	reset.text = "Сброс"
+	reset.visible = standalone
 	_audio = AudioStreamPlayer.new()
 	_audio.bus = &"Alerts"
 	_audio.volume_db = -8.0
@@ -112,7 +116,7 @@ func _ready() -> void:
 
 func _physics_process(_delta: float) -> void:
 	if standalone:
-		var speed := 0.25 if Input.is_action_pressed("slow_time") else 1.0
+		var speed := 0.25 if _slow_motion else 1.0
 		if simulation.simulation_speed != speed:
 			simulation.simulation_speed = speed
 			queue_redraw()
@@ -217,17 +221,19 @@ func _refresh() -> void:
 		_deck_origin = Vector2(389, 381) - size * _deck_cell * 0.5
 	if simulation.tile_kind(_hovered_cell) == ".":
 		_hovered_cell = DeckSimulation.INVALID_CELL
-	var pause_title := "Продолжить" if get_tree().paused else "Пауза"
+	var pause_title := "%s [%s]" % ["Продолжить" if get_tree().paused else "Пауза", _settings.key_label("tactical_pause")]
 	if _pause_button.text != pause_title:
 		_pause_button.text = pause_title
 	for index in range(_crew_buttons.size()):
 		var member := simulation.crew[index]
 		var button := _crew_buttons[index]
 		button.icon = CREW_SPRITES[member.skin]
+		var shortcut: String = _settings.key_label("crew_%d" % (index + 1))
+		button.tooltip_text = "Выбрать · " + shortcut
 		_crew_selected_styles[index].border_color = member.color
-		var title := "%s · %s\n%s\n%d / 100 HP" % [member.title, member.role, simulation.crew_status(member), ceili(member.health)]
+		var title := "[%s] %s · %s\n%s\n%d / 100 HP" % [shortcut, member.title, member.role, simulation.crew_status(member), ceili(member.health)]
 		if _crew_buttons.size() > 4:
-			title = "%s · %s\n%d HP · %s" % [member.title, member.role, ceili(member.health), simulation.crew_status(member)]
+			title = "[%s] %s · %s\n%d HP · %s" % [shortcut, member.title, member.role, ceili(member.health), simulation.crew_status(member)]
 		if button.text != title:
 			button.text = title
 		var selected := index == _selected
@@ -241,7 +247,11 @@ func _refresh() -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if not is_visible_in_tree():
 		return
-	if event is InputEventKey and event.pressed and not event.echo:
+	if (event is InputEventKey and event.pressed and not event.echo) or (event is InputEventMouseButton and event.pressed):
+		if standalone and event.is_action_pressed("slow_time", false, true):
+			_slow_motion = not _slow_motion
+			get_viewport().set_input_as_handled()
+			return
 		if standalone and event.is_action_pressed("tactical_pause", false, true):
 			_toggle_pause()
 			get_viewport().set_input_as_handled()
@@ -250,7 +260,7 @@ func _unhandled_input(event: InputEvent) -> void:
 				if event.is_action_pressed("crew_%d" % (index + 1), false, true):
 					_select(index)
 					get_viewport().set_input_as_handled()
-					break
+					return
 	if event is InputEventMouse:
 		var point: Vector2 = get_global_transform_with_canvas().affine_inverse() * event.position
 		var tile := Vector2i(((point - _deck_origin) / _deck_cell).floor())

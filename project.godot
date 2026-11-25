@@ -11,12 +11,14 @@ config_version=5
 [application]
 
 config/name="Eve Offline"
+config/version="0.10.0"
 run/main_scene="res://ui/main_menu.tscn"
 config/features=PackedStringArray("4.7", "GL Compatibility")
 
 [autoload]
 
 GameSettings="*res://ui/game_settings.gd"
+AppUpdater="*res://ui/app_updater.gd"
 
 [display]
 

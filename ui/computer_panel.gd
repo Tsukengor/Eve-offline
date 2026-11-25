@@ -25,10 +25,19 @@ func present(model: Computer) -> void:
 	_usage.add_theme_font_size_override("font_size", 17)
 	rows.add_child(_usage)
 	rows.add_child(HSeparator.new())
+	var scroll := ScrollContainer.new()
+	scroll.custom_minimum_size.y = 340.0
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	rows.add_child(scroll)
+	var options := VBoxContainer.new()
+	options.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	options.add_theme_constant_override("separation", 6)
+	scroll.add_child(options)
 	for module: String in Computer.MODULES:
 		var spec: Dictionary = Computer.MODULES[module]
 		var row := HBoxContainer.new()
-		rows.add_child(row)
+		options.add_child(row)
 		var info := VBoxContainer.new()
 		info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		row.add_child(info)
@@ -74,5 +83,5 @@ func _option(module: String, level: int, cost: int) -> String:
 	if module == "zoom":
 		status = ["Базовый", "Средний", "Дальний"][level]
 	elif level > 0:
-		status = "Вкл." if module in ["assist", "scanner"] else "%d%%" % roundi(Computer.PERFORMANCE[level] * 100.0)
+		status = "Вкл." if module in ["assist", "scanner", "objects", "threat", "aim"] else "%d%%" % roundi(Computer.PERFORMANCE[level] * 100.0)
 	return "%s  ·  %d ед." % [status, cost]

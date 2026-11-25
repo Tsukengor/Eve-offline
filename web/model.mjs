@@ -11,7 +11,7 @@ export const MODULES = {
 export const STEPS = [[0,-1],[-1,0],[1,0],[0,1]];
 export const WEAPON_FIELDS = {
   damage: ['Урон отсеку', 0, 1000, 0.1, 27],
-  crew_damage: ['Урон экипажу', 0, 1000, 0.1, 9],
+  crew_damage: ['Урон экипажу', 0, 1000, 0.1, 14],
   breach_chance: ['Шанс пробоины', 0, 1, 0.01, 0.25],
   cooldown: ['Интервал, с', 0.01, 10, 0.01, 0.32],
   energy_cost: ['Энергия за выстрел', 0, 100, 0.1, 12],
@@ -55,10 +55,10 @@ const SPECIAL_FIELDS = {
 
 };
 const PRESET = {
-  laser: {damage:36,crew_damage:5,breach_chance:0.03},
-  missile: {damage:59,crew_damage:16,breach_chance:0.4,energy_cost:26,cooldown:2},
+  laser: {damage:36,crew_damage:9,breach_chance:0.03},
+  missile: {damage:59,crew_damage:24,breach_chance:0.4,energy_cost:26,cooldown:2},
   emp: {damage:0,crew_damage:0,breach_chance:0,energy_cost:30,cooldown:2.6},
-  rail: {damage:38,crew_damage:7,breach_chance:0.3,energy_cost:46,cooldown:3.1},
+  rail: {damage:38,crew_damage:12,breach_chance:0.3,energy_cost:46,cooldown:3.1},
 };
 export function weaponFields(type) {
   const fields = {...WEAPON_FIELDS,...SPECIAL_FIELDS[type]};

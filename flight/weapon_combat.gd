@@ -209,7 +209,7 @@ static func _emp(shot: Projectile, delta: float, targets: Array[Target]) -> void
 	for target in targets:
 		if target.hostile == shot.hostile or target.disabled() or shot.affected.has(target.body):
 			continue
-		var shielded := target.has_field()
+		var shielded := target.has_field() and shot.position.distance_squared_to(target.body.position) >= target.body.shield_radius() ** 2
 		var outline := _field_outline(target.body) if shielded else target.body.outline()
 		var contact: Variant = _sector_front(shot.position, shot.angle, half_angle, outline, previous, shot.reach)
 		if contact == null:

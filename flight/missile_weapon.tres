@@ -10,6 +10,6 @@ kind = 2
 title = "Ракета"
 cooldown = 2.0
 damage = 59.0
-crew_damage = 16.0
+crew_damage = 24.0
 breach_chance = 0.4
 energy_cost = 26.0

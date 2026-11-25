@@ -5,6 +5,7 @@ signal weapon_fired(kind: int)
 signal defeat_started
 
 const Computer = preload("res://flight/flight_computer.gd")
+const Belt = preload("res://flight/asteroid_belt.gd")
 const Adventure = preload("res://flight/adventure.gd")
 const DeckSimulation = preload("res://deck/deck_simulation.gd")
 const WeaponProfile = preload("res://flight/weapon_profile.gd")
@@ -59,7 +60,9 @@ const STATION_SIZE := 392.0
 const STATION_SPIN := 0.035
 const DOCK_RADIUS := 230.0
 const DOCK_SECONDS := 1.65
-const PLAYER_TURN_SCALE := 1.5
+const PLAYER_TURN_SCALE := 1.15
+const LINEAR_DRAG := 0.07
+const FORWARD_DRAG := 0.10
 const PASSIVE_ANGULAR_DECELERATION := 0.24
 const DEFEAT_SECONDS := 2.25
 const ADVENTURE_FUEL := 8
@@ -135,6 +138,8 @@ var training_step := 1
 var enemies: Array[EnemyShip] = []
 var drones: Array[Drone] = []
 var wrecks: Array[Wreck] = []
+var asteroids: Array[Belt.Rock] = []
+var _belts := {}
 var _wrecks_by_system: Dictionary[int, Array] = {}
 var enemy: EnemyShip:
 	get:
@@ -186,6 +191,7 @@ func reset() -> void:
 	incident_seen = false
 	wrecks.clear()
 	_wrecks_by_system.clear()
+	_belts.clear()
 	body.shield.reset()
 	body.shield.online = false
 	_spawn_ship()
@@ -301,6 +307,11 @@ func _spawn_ship() -> void:
 	angular_velocity = 0.0
 	body.active.clear()
 	station_body.position = station_position()
+	asteroids = []
+	if not in_arena:
+		if not _belts.has(current_system):
+			_belts[current_system] = Belt.generate(station_position(), current_system)
+		asteroids = _belts[current_system]
 	station_body.heading = -PI * 0.5
 	docking_time = 0.0
 	acceleration = Vector2.ZERO
@@ -541,6 +552,7 @@ func _physics_process(delta: float) -> void:
 		return
 	if not in_arena:
 		_advance_station(delta)
+	var changed_rocks := _advance_asteroids()
 	var changed_wrecks := _advance_wrecks(delta)
 	var changed_loot := _advance_salvage(delta)
 	var channeling := weapon != null and weapon.kind == WeaponProfile.Kind.LASER
@@ -549,7 +561,7 @@ func _physics_process(delta: float) -> void:
 	var changed_weapons := _advance_weapons(delta)
 	if firing and not channeling and fire():
 		return # Firing already notified the view.
-	if changed_flight or changed_weapons or changed_battle or changed_wrecks or changed_loot or changed_shield or not in_arena:
+	if changed_flight or changed_weapons or changed_battle or changed_rocks or changed_wrecks or changed_loot or changed_shield or not in_arena:
 		changed.emit()
 
 
@@ -578,6 +590,11 @@ func advance_flight(delta: float, steering: float, forward_thrust: bool, braking
 	thrusting = main > 0.0 and supply > 0.0
 	if thrusting:
 		velocity = velocity.limit_length(maxf(MAX_SPEED * drive, previous_velocity.length()))
+	velocity *= exp(-LINEAR_DRAG * delta)
+	var forward := Vector2.from_angle(heading)
+	velocity -= forward * maxf(0.0, velocity.dot(forward)) * (1.0 - exp(-FORWARD_DRAG * delta))
+	if velocity.length_squared() < 0.0025:
+		velocity = Vector2.ZERO
 	ship_position += velocity * delta
 	if not in_arena:
 		_resolve_contact()
@@ -630,7 +647,11 @@ func fire() -> bool:
 		spread += (1.0 - efficiency) * 20.0
 	elif gunner.role != "Наводчик":
 		spread += 5.0
-	var angle := heading + deg_to_rad(randf_range(-spread, spread))
+	var assist := assisted_target()
+	var aim := heading
+	if not assist.is_empty():
+		aim += clampf(angle_difference(heading, assist.angle), -deg_to_rad(4.0), deg_to_rad(4.0))
+	var angle := aim + deg_to_rad(randf_range(-spread, spread))
 	var mount := body.model.muzzle
 	mount.y = -weapon.muzzle_offset
 	if not _launch_shot(weapon, body, mount, angle, false):
@@ -648,6 +669,37 @@ func fire() -> bool:
 		weapon_cooldown = weapon.cooldown / efficiency
 	changed.emit()
 	return true
+
+
+func assisted_target() -> Dictionary:
+	if computer.levels.aim <= 0 or weapon == null:
+		return {}
+	var speed := 510.0
+	match weapon.kind:
+		WeaponProfile.Kind.LASER: speed = INF
+		WeaponProfile.Kind.RAIL: speed = weapon.rail_speed
+		WeaponProfile.Kind.MISSILE: speed = weapon.missile_speed
+		WeaponProfile.Kind.EMP: speed = weapon.emp_speed
+	var origin := muzzle_position()
+	var target: Physics.Body
+	var best := INF
+	for candidate in _weapon_targets():
+		if not candidate.hostile or candidate.disabled():
+			continue
+		var offset := candidate.body.position - origin
+		if offset.length_squared() > 950.0 ** 2 or absf(angle_difference(heading, offset.angle())) > deg_to_rad(13.0):
+			continue
+		if offset.length_squared() < best:
+			best = offset.length_squared()
+			target = candidate.body
+	if target == null:
+		return {}
+	var lead := target.position
+	if speed != INF:
+		for iteration in range(4):
+			lead = target.position + target.velocity * minf(origin.distance_to(lead) / speed, 3.0)
+	var angle := origin.angle_to_point(lead)
+	return {"point": lead, "angle": angle} if absf(angle_difference(heading, angle)) <= deg_to_rad(13.0) else {}
 
 
 func stop_laser() -> void:
@@ -738,7 +790,10 @@ func _advance_battle(delta: float) -> bool:
 			enemies.remove_at(index)
 		elif not in_training:
 			hostile.obstacles = obstacles
+			hostile.belt_center = station_position() if not asteroids.is_empty() else Vector2.INF
 			hostile.advance(delta, ship_position, velocity)
+			if not asteroids.is_empty():
+				Belt.constrain(hostile.body, station_position())
 			if hostile.shot_requested:
 				_fire_hostile(hostile)
 			if hostile is SwarmShip:
@@ -751,7 +806,10 @@ func _advance_battle(delta: float) -> bool:
 		for other in range(index + 1, enemies.size()):
 			var hit := Physics.contact(hostile.body, enemies[other].body)
 			if hit != null:
-				Physics.resolve(hostile.body, enemies[other].body, hit, 0.18)
+				var second := enemies[other]
+				Physics.resolve(hostile.body, second.body, hit, 0.18)
+				_collision_damage(hostile.deck, hostile.body, hit)
+				_collision_damage(second.deck, second.body, hit)
 	return true
 
 
@@ -799,6 +857,8 @@ func _advance_drones(delta: float) -> void:
 			drones.remove_at(index)
 			continue
 		drone.advance(delta, ship_position, velocity, ship_position)
+		if not asteroids.is_empty():
+			Belt.constrain(drone.body, station_position())
 		if drone.shot_requested and _launch_shot(DRONE_WEAPON, drone.body, drone.body.model.muzzle, drone.body.heading, true):
 			weapon_fired.emit(WeaponProfile.Kind.KINETIC)
 
@@ -895,13 +955,44 @@ func _resolve_enemy_contact(hostile: EnemyShip, delta: float) -> void:
 	acceleration += (velocity - before) / delta
 	if hostile.can_ram() and hit.closing_speed >= 12.0:
 		var side := (hit.point - ship_position).rotated(-heading - PI * 0.5)
-		if body.shield.active():
-			if deck.damage_enabled:
-				body.shield.absorb(hostile.ram_damage)
-		else:
-			deck.apply_hit(hostile.ram_damage, 0.35, 0.0, side)
+		deck.apply_hit(hostile.ram_damage, 0.87, 16.0, side)
 		hostile.on_ram(hit.point)
-		notice = "Удар бура. Проверьте отсеки на палубе."
+		notice = "Удар бура · проверьте отсеки"
+	else:
+		_collision_damage(deck, body, hit)
+		_collision_damage(hostile.deck, hostile.body, hit)
+
+
+func _collision_damage(interior: DeckSimulation, ship: Physics.Body, contact: Physics.Contact) -> void:
+	if contact.closing_speed < 18.0:
+		return
+	var damage := clampf(contact.closing_speed * 0.12, 3.0, 16.0)
+	interior.apply_hit(damage, 0.16, damage * 0.25,
+		(contact.point - ship.position).rotated(-ship.heading - PI * 0.5))
+
+
+func _advance_asteroids() -> bool:
+	if asteroids.is_empty() or docked or docking_time > 0.0 or distance_to_station() < Belt.INNER_LIMIT - 60.0:
+		return false
+	var hit := false
+	for index in range(asteroids.size() - 1, -1, -1):
+		var rock := asteroids[index]
+		if ship_position.distance_squared_to(rock.position) > (rock.radius + 29.0) ** 2:
+			continue
+		asteroids.remove_at(index)
+		var direction := rock.position.direction_to(ship_position)
+		var impact_speed := maxf(0.0, -velocity.dot(direction))
+		deck.apply_hit(clampf(10.0 + impact_speed * 0.17, 12.0, 43.0), 0.48, 8.0,
+			(-direction).rotated(-heading - PI * 0.5))
+		velocity += direction * impact_speed * 0.50
+		var burst := Wreck.new()
+		burst.position = rock.position
+		burst.size = rock.radius * 1.25
+		burst.broken_hull = true
+		burst.vanishes = true
+		wrecks.append(burst)
+		hit = true
+	return hit
 
 
 func start_adventure(continue_saved: bool) -> void:

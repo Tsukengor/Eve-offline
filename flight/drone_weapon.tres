@@ -8,6 +8,6 @@ script = ExtResource("1")
 projectile = ExtResource("2")
 title = "Пушка дрона"
 damage = 8.0
-crew_damage = 1.5
+crew_damage = 3.0
 breach_chance = 0.08
 energy_cost = 0.0

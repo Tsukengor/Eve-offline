@@ -13,7 +13,7 @@ const HIT_SECONDS := 0.23
 @export var sprite_size := 76.0
 @export var weapon: WeaponProfile
 @export var model: Model = preload("res://flight/models/drill.tres")
-@export var ram_damage := 27.0
+@export var ram_damage := 44.0
 @export var ram_self_damage := 8.0
 
 var deck: DeckSimulation
@@ -35,6 +35,7 @@ var weapons_cooldown := 0.0
 var flash_remaining := 0.0
 var hit_remaining := 0.0
 var hit_side := Vector2.UP
+var belt_center := Vector2.INF
 var obstacles: Array[Physics.Body] = []
 
 
@@ -108,6 +109,12 @@ func _fly_towards(delta: float, goal_velocity: Vector2, throttle := 1.0, aim: Va
 		return
 	var goal := goal_velocity * lerpf(0.45, 1.0, drive)
 	var safe_goal := _avoid_wrecks(goal)
+	if belt_center != Vector2.INF:
+		var offset := position - belt_center
+		if offset.length_squared() > 3650.0 ** 2:
+			var normal := offset.normalized()
+			safe_goal -= normal * maxf(0.0, safe_goal.dot(normal))
+			safe_goal -= normal * clampf((offset.length() - 3650.0) * 0.33, 0.0, 110.0)
 	var course := safe_goal.angle() if aim == null or safe_goal != goal else float(aim)
 	goal = safe_goal
 	var forward := Vector2.from_angle(heading)

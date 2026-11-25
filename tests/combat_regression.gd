@@ -33,6 +33,7 @@ func _test() -> void:
 	_check_emp()
 	_check_missile_fighter_tactics()
 	_check_railgun()
+	_check_aim_and_inner_shield()
 	_check_fields_and_swarm()
 	_check_ship_effects()
 	_game._toggle_arena()
@@ -146,8 +147,8 @@ func _check_operators() -> void:
 	var direction := voyage.heading
 	deck.assign_order(0, Vector2i(1, 3))
 	voyage.advance_flight(TICK, 1.0, true, true)
-	_check(voyage.heading == direction and voyage.velocity == speed and not voyage.thrusting,
-		"Without a pilot only inertia remains")
+	_check(voyage.heading == direction and voyage.velocity.length() < speed.length() and voyage.velocity.length() > 39.0 and not voyage.thrusting,
+		"Without a pilot the ship coasts under drag")
 	_check(deck.pilot_efficiency() == 0.0, "A pilot with a pending movement order leaves the post")
 	deck.reset(true)
 	deck.apply_hit(100.0, 0.0, 0.0, Vector2.ZERO, Deck.WEAPONS)
@@ -242,13 +243,15 @@ func _check_enemy() -> void:
 	enemy.deck.reset(true)
 	var hostile_hull := enemy.deck.hull.integrity
 	var local_hull := voyage.deck.hull.integrity
-	voyage.body.shield.online = false
+	voyage.body.shield.online = true
+	var charge := voyage.body.shield.charge
 	enemy.heading = PI
 	enemy.position = voyage.ship_position + Vector2(55, 0)
 	enemy.velocity = Vector2(-120, 0)
 	voyage._advance_battle(TICK)
 	_check(voyage.deck.hull.integrity < local_hull and enemy.deck.hull.integrity < hostile_hull
-		and not enemy.can_ram(), "Ramming damages both ships and starts a retreat")
+		and not enemy.can_ram() and voyage.body.shield.charge == charge,
+		"Ramming damages both ships, bypasses the active shield and starts a retreat")
 	_check(local_hull - voyage.deck.hull.integrity > hostile_hull - enemy.deck.hull.integrity,
 		"Ramming damages the target more than the drill")
 	_check(enemy.deck.hull.condition(enemy.deck.weapons_tile) < 1.0, "The ram damages the drill weapons room")
@@ -524,6 +527,46 @@ func _check_railgun() -> void:
 			damaged_rooms += 1
 	_check(damaged_rooms >= 2 and second.deck.hull.integrity < Hull.HULL_MAX,
 		"The rail bolt damages multiple compartments in order and exits to hit another ship")
+
+
+func _check_aim_and_inner_shield() -> void:
+	var voyage := _weapon_fixture(0)
+	var target := voyage.add_test_enemy(Voyage.Opponent.DRILL)
+	var origin := voyage.muzzle_position()
+	target.position = origin + Vector2(220.0, 8.0)
+	target.velocity = Vector2(0.0, 50.0)
+	voyage.set_computer("aim", 1)
+	var aim := voyage.assisted_target()
+	_check(not aim.is_empty() and aim.point.y > target.position.y,
+		"Aim assistance marks the intercept ahead of a moving target")
+	_check(voyage.fire(), "The assisted kinetic weapon fires")
+	var direction := voyage.projectiles[0].velocity.angle()
+	_check(direction > 0.0 and direction <= deg_to_rad(4.0) + 0.0001,
+		"Aiming nudges the shot within a four-degree limit")
+
+	voyage = _weapon_fixture(0)
+	target = voyage.add_test_enemy(Voyage.Opponent.DRILL)
+	target.position = voyage.muzzle_position() + Vector2(42.0, 0.0)
+	target.heading = PI
+	target.body.shield.online = true
+	var charge := target.body.shield.charge
+	var integrity := target.deck.hull.integrity
+	_check(voyage.fire(), "A kinetic shot can start inside the enemy field")
+	for frame in range(7):
+		voyage._advance_weapons(TICK)
+	_check(target.body.shield.charge == charge and target.deck.hull.integrity < integrity,
+		"A shot fired inside a shield damages the hull directly")
+
+	voyage = _weapon_fixture(0)
+	target = voyage.add_test_enemy(Voyage.Opponent.FIGHTER)
+	target.position = voyage.ship_position + Vector2(49.0, 0.0)
+	target.heading = PI
+	target.velocity = Vector2(-95.0, 0.0)
+	integrity = voyage.deck.hull.integrity
+	voyage._resolve_enemy_contact(target, TICK)
+	var damage := integrity - voyage.deck.hull.integrity
+	_check(damage > 0.0 and damage < 44.0 and target.deck.hull.integrity < Hull.HULL_MAX,
+		"An ordinary ship collision damages both hulls less than a drill ram")
 
 
 func _check_fields_and_swarm() -> void:

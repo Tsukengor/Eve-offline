@@ -10,5 +10,5 @@ cooldown = 0.72
 energy_cost = 9.0
 damage = 7.0
 breach_chance = 0.12
-crew_damage = 2.0
+crew_damage = 4.0
 mounts = PackedVector2Array(-11, -13, 11, -13)

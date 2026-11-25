@@ -8,7 +8,7 @@ extends Resource
 
 @export var damage := 27.0
 @export_range(0.0, 1.0, 0.01) var breach_chance := 0.25
-@export var crew_damage := 9.0
+@export var crew_damage := 14.0
 @export_range(0.0, 45.0, 0.5) var damaged_spread_degrees := 18.0
 
 enum Kind { KINETIC, LASER, MISSILE, EMP, RAIL }

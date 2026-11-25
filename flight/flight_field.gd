@@ -6,6 +6,7 @@ const Physics = preload("res://flight/ship_physics.gd")
 const SHIP := preload("res://assets/flight/rescue_ship.png")
 const PLAYER_WRECK := preload("res://assets/flight/rescue_wreck.png")
 const PLAYER_DERELICT := preload("res://assets/flight/rescue_derelict.png")
+const ASTEROIDS := preload("res://assets/flight/asteroid_belt.png")
 const CONTAINER := preload("res://assets/flight/salvage_container.png")
 const ION_CLOUD := preload("res://assets/flight/ion_cloud.png")
 const STATION := preload("res://assets/flight/orbital_station.png")
@@ -63,6 +64,7 @@ func _draw() -> void:
 	draw_texture_rect(STARFIELD, Rect2(Vector2.ZERO, size), false)
 	_draw_grid(size)
 	_draw_environment(size)
+	_draw_asteroids(size)
 	if not voyage.in_arena:
 		_draw_station(size)
 	_draw_wrecks(size)
@@ -80,6 +82,7 @@ func _draw() -> void:
 	_draw_vector(center, voyage.acceleration * 0.35, ACCELERATION_COLOR, "a", true)
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE / zoom)
 	size = frame.size
+	_draw_computer(size)
 	if voyage.scan_enemy and is_instance_valid(voyage.enemy):
 		_draw_scan(size)
 	_text("v  Скорость", Vector2(18, size.y - 18), 13, VELOCITY_COLOR)
@@ -154,8 +157,8 @@ func _draw_station(size: Vector2) -> void:
 		var label_position := station + Vector2(0, Voyage.STATION_SIZE * 0.5 + 23.0)
 		if visible_area.has_point(station) and visible_area.grow(-34.0).has_point(label_position):
 			_centered(label, label_position, color)
-	if not visible_area.has_point(station):
-		_draw_station_bearing(size, station, label, color)
+	if not visible_area.has_point(station) and (active_distress or voyage.computer.levels.objects > 0):
+		_draw_station_bearing(size, station, label, color if active_distress else _scanner_color(color))
 
 
 func _draw_enemy(enemy: Voyage.EnemyShip, size: Vector2) -> void:
@@ -180,7 +183,7 @@ func _draw_enemy(enemy: Voyage.EnemyShip, size: Vector2) -> void:
 		draw_set_transform(Vector2.ZERO)
 		_draw_shield(enemy.body)
 		if not visible.has_point(point):
-			_draw_station_bearing(size, point, enemy.call_sign, danger)
+			_draw_threat(size, enemy)
 			return
 		draw_rect(Rect2(point + Vector2(-24, 43), Vector2(48, 3)), Color("#30465c"))
 		draw_rect(Rect2(point + Vector2(-24, 43), Vector2(48 * condition, 3)), danger)
@@ -191,7 +194,66 @@ func _draw_enemy(enemy: Voyage.EnemyShip, size: Vector2) -> void:
 			draw_rect(Rect2(point + Vector2(-24, 49), Vector2(48 * ratio, 2)), Color("#76ccf0") if field.active() else Color("#677d95"))
 		_centered(enemy.call_sign, point + Vector2(0, 65), danger)
 	if not Rect2(Vector2.ZERO, size).has_point(point):
-		_draw_station_bearing(size, point, enemy.call_sign, danger)
+		_draw_threat(size, enemy)
+
+
+func _draw_asteroids(size: Vector2) -> void:
+	var view := Rect2(Vector2.ZERO, size)
+	for rock in voyage.asteroids:
+		var point := _world_point(rock.position)
+		if not view.grow(rock.radius).has_point(point):
+			continue
+		draw_set_transform(point, rock.rotation)
+		_effect_frame(ASTEROIDS, rock.frame, Vector2.ZERO, rock.radius * 2.2)
+		draw_set_transform(Vector2.ZERO)
+
+
+func _scanner_color(color: Color) -> Color:
+	return Color(color, 0.70 + 0.30 * sin(Time.get_ticks_msec() * 0.005))
+
+
+func _draw_threat(size: Vector2, enemy: Voyage.EnemyShip) -> void:
+	if voyage.computer.levels.threat <= 0:
+		return
+	var approach := (enemy.velocity - voyage.velocity).dot(enemy.position.direction_to(voyage.ship_position))
+	var color := _scanner_color(Color("#ff8c85")) if approach > 20.0 else Color("#ca9c95")
+	_draw_station_bearing(size, _world_point(enemy.position), enemy.call_sign, color)
+
+
+func _draw_computer(size: Vector2) -> void:
+	var view := Rect2(Vector2.ZERO, size)
+	if voyage.computer.levels.objects > 0:
+		var objects: Array[Vector2] = []
+		var captions: Array[String] = []
+		if voyage.adventure != null:
+			for item in voyage.adventure.containers.get(voyage.current_system, []):
+				objects.append(item.position)
+				captions.append("Контейнер")
+		for wreck in voyage.wrecks:
+			if wreck.collider != null:
+				objects.append(wreck.position)
+				captions.append("Остов")
+		var nearest := -1
+		var distance := INF
+		for index in objects.size():
+			var point := world_to_screen(objects[index])
+			var offset := size * 0.5 - point
+			if not view.has_point(point) and offset.length_squared() < distance:
+				nearest = index
+				distance = offset.length_squared()
+		if nearest >= 0:
+			_draw_station_bearing(size, world_to_screen(objects[nearest]), captions[nearest], _scanner_color(VELOCITY_COLOR))
+	var assist := voyage.assisted_target()
+	if assist.is_empty():
+		return
+	var lead := world_to_screen(assist.point)
+	if not view.grow(-10.0).has_point(lead):
+		return
+	var origin := world_to_screen(voyage.muzzle_position())
+	draw_dashed_line(origin, lead, Color(0.47, 0.92, 0.82, 0.38), 1.0, 7.0, true, true)
+	draw_arc(lead, 10.0, 0.0, TAU, 24, VELOCITY_COLOR, 1.0, true)
+	for axis in [Vector2.LEFT, Vector2.RIGHT, Vector2.UP, Vector2.DOWN]:
+		draw_line(lead + axis * 6.0, lead + axis * 13.0, VELOCITY_COLOR, 1.0, true)
 
 
 func _draw_drone(drone: Voyage.Drone, size: Vector2) -> void:

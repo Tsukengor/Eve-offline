@@ -7,12 +7,15 @@ const MODULES := {
 	"shield": {"title": "Автоматика щита", "cost": [0, 2, 3, 4], "hint": "Поддерживает поле и заряжает его медленнее оператора"},
 	"weapons": {"title": "Автоматика орудий", "cost": [0, 2, 3, 4], "hint": "Ведёт огонь по команде с меньшей точностью и темпом"},
 	"scanner": {"title": "Сканер противников", "cost": [0, 2], "hint": "Открывает палубы противников в полёте"},
+	"objects": {"title": "Поиск объектов", "cost": [0, 2], "hint": "Метки станций, контейнеров и остовов"},
+	"threat": {"title": "Указатель угроз", "cost": [0, 2], "hint": "Направление на противников и подсветка сближения"},
+	"aim": {"title": "Помощь в прицеливании", "cost": [0, 2], "hint": "Упреждение и доводка выстрела до 4°"},
 	"zoom": {"title": "Дальность обзора", "cost": [0, 1, 3], "hint": "Средний и дальний масштаб используют память"},
 }
 const PERFORMANCE := [0.0, 0.40, 0.65, 0.85]
 const SCALES := [1.0, 0.8, 0.62]
 
-var levels := {"assist": 1, "pilot": 0, "shield": 0, "weapons": 0, "scanner": 1, "zoom": 0}
+var levels := {"assist": 1, "pilot": 0, "shield": 0, "weapons": 0, "scanner": 1, "zoom": 0, "objects": 0, "threat": 1, "aim": 0}
 
 
 func configure(module: String, level: int) -> bool:
@@ -23,6 +26,8 @@ func configure(module: String, level: int) -> bool:
 
 
 func restore(saved: Dictionary) -> void:
+	if not saved.is_empty() and not saved.has("threat"):
+		levels.threat = 0
 	for module in MODULES:
 		var level: Variant = saved.get(module)
 		if level is int:

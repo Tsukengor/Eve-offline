@@ -18,6 +18,7 @@ var _status: Label
 var _page := "main"
 var settings_only := false
 signal settings_closed
+signal settings_escaped
 
 
 func _ready() -> void:
@@ -104,7 +105,7 @@ func _show_settings() -> void:
 	var keyboard := VBoxContainer.new()
 	keyboard.custom_minimum_size.x = 490
 	rows.add_child(keyboard)
-	keyboard.add_child(_text("Клавиатура", 24, MINT))
+	keyboard.add_child(_text("Клавиатура и мышь", 24, MINT))
 	var scroll := ScrollContainer.new()
 	scroll.custom_minimum_size = Vector2(490, 335)
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -135,7 +136,7 @@ func _show_settings() -> void:
 		slider.value = _settings.volumes[bus]
 		slider.value_changed.connect(_volume_changed.bind(bus, label))
 		sound.add_child(slider)
-	_status = _text("Выбери действие, чтобы назначить клавишу.", 15, DIM)
+	_status = _text("Выбери действие, затем нажми клавишу или кнопку мыши.", 15, DIM)
 	_panel.add_child(_status)
 	_menu_button(_panel, "Назад", _close_settings, Vector2(130, 42)).size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 
@@ -155,7 +156,7 @@ func _volume_changed(value: float, bus: String, label: Label) -> void:
 
 func _capture(action: String) -> void:
 	_capturing = action
-	_status.text = "Назначить «%s». Нажми клавишу или Esc для отмены." % Settings.LABELS[action]
+	_status.text = "Назначить «%s». Нажми клавишу или кнопку мыши. Esc отменяет." % Settings.LABELS[action]
 
 
 func _reset_keys() -> void:
@@ -166,26 +167,36 @@ func _reset_keys() -> void:
 	_status.text = "Клавиши восстановлены."
 
 
+func is_binding_key() -> bool:
+	return not _capturing.is_empty()
+
+
 func _input(event: InputEvent) -> void:
-	if not (event is InputEventKey and event.pressed and not event.echo):
+	var key: bool = event is InputEventKey and event.pressed and not event.echo
+	var mouse: bool = event is InputEventMouseButton and event.pressed
+	if not key and not mouse:
 		return
 	if not _capturing.is_empty():
 		get_viewport().set_input_as_handled()
-		if event.physical_keycode == KEY_ESCAPE:
+		var code: int = event.physical_keycode if key else -event.button_index
+		if code == KEY_ESCAPE:
 			_capturing = ""
 			_status.text = "Назначение отменено."
 			return
-		var error := _settings.rebind(_capturing, event.physical_keycode)
+		var error := _settings.rebind(_capturing, code)
 		if not error.is_empty():
 			_status.text = error + " Выбери другую клавишу."
 			return
 		_binding_buttons[_capturing].text = _settings.key_label(_capturing)
 		_capturing = ""
-		_status.text = "Клавиша назначена."
+		_status.text = "Назначение сохранено."
 		_settings.save_settings()
-	elif event.physical_keycode == KEY_ESCAPE and _page != "main":
+	elif key and event.physical_keycode == KEY_ESCAPE and _page != "main":
 		get_viewport().set_input_as_handled()
-		_close_settings()
+		if settings_only:
+			settings_escaped.emit()
+		else:
+			_close_settings()
 
 
 func _start(session: Run.Session, resume := false) -> void:

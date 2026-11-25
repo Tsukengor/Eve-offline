@@ -9,6 +9,6 @@ projectile = ExtResource("2")
 kind = 1
 title = "Лазер"
 damage = 36.0
-crew_damage = 5.0
+crew_damage = 9.0
 breach_chance = 0.03
 laser_energy_per_second = 42.0

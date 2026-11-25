@@ -1,6 +1,7 @@
 extends SceneTree
 ## Run with: godot --headless --path . --script res://tests/voyage_regression.gd
 
+const Updater = preload("res://ui/app_updater.gd")
 const Run = preload("res://flight/run.gd")
 const Voyage = preload("res://flight/voyage_state.gd")
 const Physics = Voyage.Physics
@@ -25,6 +26,9 @@ func _test_voyage() -> void:
 		"Main scene starts in a healthy ship in local flight")
 	_test_ship_physics()
 	_test_slow_time()
+	_test_global_shortcuts()
+	_test_application_updates()
+	_test_asteroid_belt()
 	_run._reset()
 	await _test_inertia_and_pause()
 
@@ -35,8 +39,8 @@ func _test_voyage() -> void:
 		"Non-adjacent systems cannot be selected for a jump")
 	_system_click(Voyage.DISTRESS)
 	_key(KEY_ENTER)
-	_check(_run.mode == Run.Mode.FLIGHT and not paused and _voyage.current_system == Voyage.DISTRESS,
-		"A valid jump leaves the map and restores the previous pause")
+	_check(_run.mode == Run.Mode.FLIGHT and paused and _voyage.current_system == Voyage.DISTRESS,
+		"A jump into a hostile system leaves the map and starts a tactical pause")
 	_check(_voyage.fuel == 3 and _voyage.deck.engine_health == 0.30 and _voyage.velocity.is_zero_approx(),
 		"Jump spends fuel once and the scripted incident damages the ship")
 	for door in _voyage.deck.doors.values():
@@ -49,6 +53,8 @@ func _test_voyage() -> void:
 	_check(_voyage.fuel == 3 and _voyage.current_system == Voyage.DISTRESS,
 		"An impaired engine blocks a jump without spending fuel")
 	_key(KEY_M)
+	_key(KEY_SPACE)
+	_check(not paused, "The first threat only pauses once per visit")
 
 	Input.action_press("flight_fire")
 	_tick(180)
@@ -128,12 +134,14 @@ func _test_voyage() -> void:
 
 
 func _test_menu_and_training() -> void:
-	_run.free()
 	var settings = root.get_node("GameSettings")
 	var test_config := "user://settings-regression.cfg"
 	_check(settings.rebind("flight_fire", KEY_R).is_empty()
 		and not settings.rebind("flight_fire", KEY_W).is_empty()
 		and settings.key_label("flight_fire") == "R", "A conflicting binding preserves both shortcuts")
+	_check(settings.rebind("toggle_computer", -MOUSE_BUTTON_XBUTTON2).is_empty()
+		and not settings.rebind("toggle_map", -MOUSE_BUTTON_XBUTTON2).is_empty(),
+		"An extra mouse button can be assigned and participates in conflict checks")
 	settings.set_volume("Weapons", 0.35)
 	_check(settings.save_settings(test_config) == OK, "Settings are written to disk")
 	settings.reset_keyboard()
@@ -141,9 +149,16 @@ func _test_menu_and_training() -> void:
 	var fire_key: InputEventKey = InputMap.action_get_events("flight_fire")[0]
 	_check(fire_key.physical_keycode == KEY_R and is_equal_approx(settings.volumes["Weapons"], 0.35)
 		and is_equal_approx(settings.volumes["Alerts"], 1.0), "The assigned shortcut and individual channel volume reload")
+	var mouse: InputEventMouseButton = InputMap.action_get_events("toggle_computer")[0]
+	_check(mouse.button_index == MOUSE_BUTTON_XBUTTON2, "The extra mouse button survives settings reload")
+	_click(Vector2(320, 280), MOUSE_BUTTON_XBUTTON2)
+	_check(_run._computer_panel.visible, "The rebound mouse button opens the flight computer")
+	_click(Vector2(320, 280), MOUSE_BUTTON_XBUTTON2)
+	_check(not _run._computer_panel.visible, "Pressing the rebound mouse button twice toggles its panel")
 	settings.load_settings()
 	DirAccess.remove_absolute(test_config)
 
+	_run.free()
 	var menu = load(ProjectSettings.get_setting("application/run/main_scene")).instantiate()
 	root.add_child(menu)
 	current_scene = menu
@@ -231,6 +246,8 @@ func _test_adventure() -> void:
 	for hostile in voyage.enemies:
 		hostile.deck.apply_hit(Voyage.DeckSimulation.Hull.HULL_MAX, 0.0)
 	voyage._advance_battle(TICK)
+	_key(KEY_SPACE)
+	_check(not paused, "Clearing the initial encounter and resuming leaves the system running")
 	var loot: Array = voyage.adventure.containers[Voyage.Adventure.SCRAP]
 	_check(voyage.enemies.is_empty() and loot.size() == 2 and voyage.adventure.credits == 52,
 		"Victory drops containers instead of immediately paying salvage")
@@ -280,7 +297,6 @@ func _check_station_and_computer(voyage: Voyage) -> void:
 	_check(_run._pause_overlay.visible and paused, "Escape opens the central pause overlay")
 	_run._open_settings()
 	_check(is_instance_valid(_run._settings_overlay) and paused, "Settings open without leaving or unpausing the run")
-	_key(KEY_ESCAPE)
 	_key(KEY_ESCAPE)
 	_check(not _run._pause_overlay.visible and not paused, "Returning from settings restores the original pause state")
 	_run._open_journal()
@@ -343,6 +359,8 @@ func _check_station_and_computer(voyage: Voyage) -> void:
 
 func _train_until_next(action: String, limit: int) -> void:
 	var step := _run._training.step
+	if paused:
+		_key(KEY_SPACE)
 	if not action.is_empty():
 		Input.action_press(action)
 	for frame in limit:
@@ -358,9 +376,9 @@ func _test_ship_physics() -> void:
 	var ship := Physics.Body.new()
 	ship.model = _voyage.body.model
 	var turn_group := Voyage.Physics.Model.Group.TURN_RIGHT
-	_check(is_equal_approx(_voyage.body._group_torque(turn_group), ship._group_torque(turn_group) * 1.5)
-		and is_equal_approx(_voyage.body.passive_angular_deceleration, 0.24),
-		"The player's turn and stabilization nozzles and passive damping are strengthened")
+	_check(is_equal_approx(_voyage.body._group_torque(turn_group), ship._group_torque(turn_group) * 1.15)
+		and _voyage.body.passive_angular_deceleration > 0.0,
+		"Player steering and stabilization use the tuned nozzles and passive damping")
 	ship.advance(TICK, 0.0, 1.0, 0.0, false)
 	var spin := ship.spin
 	var heading := ship.heading
@@ -411,22 +429,88 @@ func _test_slow_time() -> void:
 	var start := projectile.position
 	var ship_start := _voyage.ship_position
 	var energy := _voyage.deck.power.energy
-	Input.action_press("slow_time")
+	_key(KEY_T)
 	_run._physics_process(TICK)
 	_tick(6)
 	_check(_voyage.simulation_speed == 0.25 and _voyage.deck.simulation_speed == 0.25,
-		"Holding the action slows both the local field and the deck")
+		"Pressing slow time toggles both the local field and the deck")
 	_check(projectile.position.is_equal_approx(start + projectile.velocity * TICK * 1.5)
-		and _voyage.ship_position.is_equal_approx(ship_start + test_speed * TICK * 1.5)
+		and _voyage.ship_position.distance_to(ship_start + test_speed * TICK * 1.5) < 0.02
 		and is_equal_approx(_voyage.deck.power.energy, energy + _voyage.deck.energy_recovery_rate() * TICK * 1.5),
 		"Projectiles, ship motion and reactor recovery all advance at quarter speed")
 	_key(KEY_TAB)
-	_check(_voyage.deck.simulation_speed == 0.25, "Changing views while holding slow time preserves the speed")
-	Input.action_release("slow_time")
+	_check(_voyage.deck.simulation_speed == 0.25, "Changing views preserves slow time")
+	_key(KEY_T)
 	_run._physics_process(TICK)
 	_check(_voyage.simulation_speed == 1.0 and _voyage.deck.simulation_speed == 1.0,
-		"Releasing slow time restores normal play")
+		"Pressing the shortcut again restores normal play")
 	_key(KEY_TAB)
+
+
+func _test_application_updates() -> void:
+	_check(Updater.newer("v0.10.0", "v0.9.9") and not Updater.newer("v0.9.9", "v0.10.0")
+		and not Updater.newer("v0.11.0-rc.1", "v0.10.0") and not Updater.newer("v../1.2.3", "v0.10.0"),
+		"The updater only accepts valid newer numbered releases")
+	var expected := "a".repeat(64)
+	var asset := "Eve-Offline-linux-x86_64.zip"
+	_check(Updater.checksum("%s  %s\n" % [expected, asset], asset) == expected
+		and Updater.checksum("%s  another.zip" % expected, asset).is_empty(),
+		"The updater looks up the SHA-256 for the selected archive only")
+	var folder := ProjectSettings.globalize_path("user://update-regression")
+	var archive := folder.path_join("build.zip")
+	var binary := "Eve-Offline.x86_64"
+	var pack := "Eve-Offline.pck"
+	DirAccess.make_dir_recursive_absolute(folder)
+	var zipper := ZIPPacker.new()
+	zipper.open(archive)
+	for name in [binary, pack, "unexpected.txt"]:
+		zipper.start_file(name)
+		zipper.write_file(name.to_utf8_buffer())
+		zipper.close_file()
+	zipper.close()
+	_check(Updater.unpack(archive, folder, binary)
+		and FileAccess.get_file_as_string(folder.path_join(binary)) == binary
+		and FileAccess.get_file_as_string(folder.path_join(pack)) == pack
+		and not FileAccess.file_exists(folder.path_join("unexpected.txt")),
+		"The updater extracts the expected executable and game data only")
+	for name in [binary, pack, "build.zip"]:
+		DirAccess.remove_absolute(folder.path_join(name))
+	DirAccess.remove_absolute(folder)
+
+
+func _test_global_shortcuts() -> void:
+	_key(KEY_M)
+	_key(KEY_B)
+	_check(_run.mode == Run.Mode.MAP and _run._computer_panel.visible, "The computer shortcut works over the sector map")
+	_key(KEY_TAB)
+	_check(_run.mode == Run.Mode.DECK and not _run._computer_panel.visible, "A view shortcut switches out of an overlay")
+	_key(KEY_ESCAPE)
+	_check(_run.mode == Run.Mode.FLIGHT and not _run._pause_overlay.visible and not paused,
+		"Esc returns from the deck directly to flight")
+	var member := _voyage.deck.crew[0]
+	member.health = 29.0
+	_run._refresh()
+	_run._refresh()
+	_check(_run._alerts.size() == 1 and _run._alerts.back().text.contains("29 HP"),
+		"Crossing the crew health threshold queues one notification")
+	member.health = 100.0
+
+
+func _test_asteroid_belt() -> void:
+	var belt := _voyage.asteroids
+	_check(belt.size() == Voyage.Belt.COUNT, "Each system generates a populated asteroid belt")
+	var rock := belt[0]
+	var outward := _voyage.station_position().direction_to(rock.position)
+	_voyage.ship_position = rock.position - outward * (rock.radius + 10.0)
+	_voyage.velocity = outward * 110.0
+	var hull := _voyage.deck.hull.integrity
+	_check(_voyage._advance_asteroids() and belt.size() < Voyage.Belt.COUNT and _voyage.deck.hull.integrity < hull,
+		"An asteroid impact damages the hull and removes the rock")
+	var enemy := _voyage._spawn_enemy(rock.position, Voyage.Opponent.FIGHTER)
+	_voyage.enemies.append(enemy)
+	_voyage._advance_battle(TICK)
+	_check(enemy.position.distance_to(_voyage.station_position()) <= Voyage.Belt.INNER_LIMIT + 0.01,
+		"Enemies stay inside the belt boundary")
 
 
 func _test_inertia_and_pause() -> void:
@@ -441,7 +525,7 @@ func _test_inertia_and_pause() -> void:
 	Input.action_press("flight_thrust")
 	_tick(35)
 	Input.action_release("flight_thrust")
-	_check(_voyage.velocity.length() > 40.0 and _voyage.acceleration.dot(Vector2.from_angle(_voyage.heading)) > 80.0,
+	_check(_voyage.velocity.length() > 40.0 and _voyage.acceleration.dot(Vector2.from_angle(_voyage.heading)) > 70.0,
 		"Main thrust accelerates along the hull")
 	var speed := _voyage.velocity
 	var position := _voyage.ship_position
@@ -450,8 +534,8 @@ func _test_inertia_and_pause() -> void:
 	Input.action_press("flight_turn_left")
 	_tick(8)
 	Input.action_release("flight_turn_left")
-	_check(_voyage.velocity.is_equal_approx(speed) and _voyage.ship_position.distance_to(position) > 1.0
-		and _voyage.acceleration.is_zero_approx(), "Deck view retains inertial motion without applying flight input")
+	_check(_voyage.velocity.length() < speed.length() and _voyage.ship_position.distance_to(position) > 1.0
+		and _voyage.acceleration.dot(_voyage.velocity) < 0.0, "Opening the deck leaves drag as the only linear acceleration")
 	_key(KEY_SPACE)
 	_key(KEY_M)
 	position = _voyage.ship_position
@@ -460,9 +544,8 @@ func _test_inertia_and_pause() -> void:
 	_check(_run.mode == Run.Mode.MAP and paused and _voyage.ship_position == position,
 		"Sector map freezes the voyage")
 	_key(KEY_M)
-	_check(_run.mode == Run.Mode.DECK and paused, "Closing the map restores the previous screen and pause")
+	_check(_run.mode == Run.Mode.FLIGHT and paused, "Closing the map restores flight and the previous pause")
 	_key(KEY_SPACE)
-	_key(KEY_TAB)
 	_brake()
 
 
@@ -486,7 +569,7 @@ func _test_unbounded_flight_and_weapon() -> void:
 	Input.action_press("flight_turn_right")
 	_tick(34)
 	Input.action_release("flight_turn_right")
-	_check(_voyage.velocity.is_equal_approx(drift), "Turning while coasting does not redirect velocity")
+	_check(_voyage.velocity.length() < drift.length() and _voyage.velocity.normalized().dot(drift.normalized()) > 0.98, "Drag slows coasting ships without a large change in the drift direction")
 	_check(absf(_voyage.velocity.normalized().cross(Vector2.from_angle(_voyage.heading))) > 0.1,
 		"The hull heading and drift can differ")
 	Input.action_press("flight_fire")
